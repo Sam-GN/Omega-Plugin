@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img">
+<title>Omega-Plugin app icon, small-size variant</title>
+<desc>The same gauge-and-needle mark reduced to three shapes for 16 to 32 pixel rendering: a dark
+rounded tile, a thick orange arc, and a light guitar neck rising from a plain body.</desc>
+
+<!-- Same mark as omega_icon_v6.svg with everything that cannot survive a 16 px tile removed:
+     no frets, no pickups, no headstock outline, no grey remainder of the arc. Strokes are
+     proportionally heavier because a 30/512 stroke lands under one pixel at this size. -->
+<rect x="8" y="8" width="496" height="496" rx="112" fill="#1E2228"/>
+
+<path d="M104.6 351.4 A156 156 0 0 1 347.7 184.9" fill="none" stroke="#FF8A3D"
+      stroke-width="46" stroke-linecap="round"/>
+
+<!-- Body: a plain rounded blob. At this size the Stratocaster outline was indistinguishable from
+     an ellipse, so it is drawn as one and the detail is left to the large variant. -->
+<g transform="translate(236,336) rotate(-54)">
+  <rect x="-56" y="-46" width="112" height="92" rx="42" fill="#2C323B" stroke="#E6E9EF" stroke-width="16"/>
+</g>
+
+<line x1="284" y1="272" x2="382" y2="138" stroke="#E6E9EF" stroke-width="38" stroke-linecap="round"/>
+</svg>

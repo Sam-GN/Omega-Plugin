@@ -1,0 +1,78 @@
+name: Bug report
+description: Something the program does that it should not
+labels: [ bug ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things make an audio bug report actionable, and both are one command away.
+
+        `--list-backends` says which driver you are actually on — it is the fastest answer to
+        "why is it 200 ms on this machine", and a report that turns out to be about the Java Sound
+        fallback is a different report from one about ASIO.
+
+        The counter to quote for anything that sounds wrong is **`realtimeRatio`**, not
+        `deadlineMisses`. A garbage collection stalls the audio thread *between* callbacks rather
+        than making one slow, so `deadlineMisses` can read 0 through audible dropouts. Measured on
+        this project: 97.2 % of realtime moved, and zero deadline misses recorded for it.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The title bar, or ☰ → About.
+      placeholder: 1.0.65-beta
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: backends
+    attributes:
+      label: Output of `omega.sh --list-backends` (or `omega.bat --list-backends`)
+      description: Paste it whole — the backends that did *not* load, and why, are usually the point.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: settings
+    attributes:
+      label: Driver, device, rate and buffer
+      placeholder: ASIO, Sonicake, 44.1 kHz, 64 frames
+    validations:
+      required: true
+
+  - type: textarea
+    id: counters
+    attributes:
+      label: realtimeRatio, xruns, worst callback
+      description: >
+        From the meters, or from `--selftest --chain --stress <in> <out> 60`. A selftest run without
+        `--chain --stress` measures the device path alone and means little.
+      render: text
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >
+        ☰ → Logging, reproduce the fault, then attach `logs/omega.txt` from the settings folder
+        (`%APPDATA%\omega-plugin` on Windows). Optional, but it is the thing that catches the
+        intermittent ones.
+      render: text
+
+  - type: checkboxes
+    id: os
+    attributes:
+      label: Platform
+      options:
+        - label: Windows
+        - label: Linux — please say which distribution. Nothing here has ever been run on Linux, so this is a port report rather than a bug report.

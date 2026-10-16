@@ -1,0 +1,82 @@
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### IntelliJ IDEA ###
+# The whole of it, and the run configurations with it. None of it is the program: Gradle drives the
+# build, and IntelliJ regenerates every one of these files when the project is imported. Several of
+# them also describe this machine rather than the project — misc.xml names the SDK `corretto-11`,
+# which is neither present on a clone nor the version the toolchain in build.gradle.kts asks for.
+.idea/
+.run/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### Kotlin ###
+.kotlin
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### OS junk ###
+.DS_Store
+Thumbs.db
+desktop.ini
+
+### Local development state — never publish ###
+# The whole folder: the tooling setup this is developed with is not part of the program. Its
+# settings.local.json records absolute paths under the developer's home directory and past session
+# identifiers, and the agent definitions beside it are a working arrangement rather than something a
+# contributor needs. CLAUDE.md at the root is deliberately *not* covered by this — it documents the
+# code and is meant to be read.
+.claude/
+.mcp.json
+
+# The troubleshooting log, when it is switched on. It normally lands in the settings folder rather
+# than here, but --selftest run from the project root can put one in the working directory.
+logs/
+*.log
+
+# JVM heap dumps. They land beside whatever produced them and are hundreds of megabytes.
+# hs_err_pid*.log is already covered by *.log above.
+*.hprof
+
+# Audio assets, which this project never ships: a NAM capture, an impulse response and a recording
+# all carry someone's copyright, and the program loads them from wherever the user keeps them. The
+# recorder writes to the home folder by default, but its destination is settable to anywhere — so
+# this is the guard that stops `git add -A` from ever committing one.
+*.nam
+*.wav
+*.ir
+
+### Kept on disk, kept out of the repository ###
+# Superseded icon drafts. The two the program actually loads are omega_icon_v6.svg and
+# omega_icon_v6_small.svg (see ui/AppIcon.kt); these are the versions they came from.
+/guitar_gauge_icon_no_screen_v5.svg
+/guitar_gauge_icon_themed_v4.png
+/guitar_gauge_icon_themed_v4.svg

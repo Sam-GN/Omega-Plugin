@@ -1,0 +1,110 @@
+# Publishes the artifacts a version stands for.
+#
+# The trigger is a push to main, not a tag. The version in build.gradle.kts is therefore the only
+# thing that decides whether a release happens: this reads it, and if no tag matches it yet, builds
+# the bundle and publishes a draft release at tag `v<version>`. Merging your work is the whole
+# ceremony — there is no separate tag to remember, and no way for a tag and a version to disagree,
+# because only one of them is written by hand.
+#
+# A push whose version is already released is a failure, deliberately. Every push to main is meant
+# to be a release, so an unbumped version is a mistake rather than a quiet no-op, and it says so:
+# "v1.0.65-beta is already released. Every push to main must bump the version." The alternative —
+# skipping silently — hides a forgotten bump until somebody wonders where their release went.
+#
+# Note what this can and cannot do. A workflow runs *after* a push is accepted, so it cannot reject
+# one; it fails the commit loudly. To make a *merge* impossible instead, require pull requests into
+# main and make the `build` check required (Settings -> Branches -> branch protection). The same
+# version check runs in build.yml on pull requests for exactly that reason.
+#
+# GPLv3 §6(d) is what publishing here has to discharge: a binary offered for download has to come
+# with its Corresponding Source from the same place, and a GitHub release carries the tag's source
+# archives beside the file attached below. Licences.SOURCE_URL points at this repository for the same reason, so the
+# program itself can say where its source is.
+#
+# windows-latest is not a preference. `exeZip` bundles a jlink image, and a jlink image is
+# per-platform; jpackage is stricter still, emitting a native launcher for the machine it runs on,
+# so the `.exe` can only come off a Windows runner. It needs no WiX, because it builds no installer
+# — `--type app-image` is a folder with a launcher in it, not an `.msi`.
+name: release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Two pushes in quick succession would otherwise race to create the same tag. Queue them instead of
+# cancelling: a superseded run still has a version of its own worth publishing.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      # fetch-depth: 0 because the version check below asks whether a tag exists, and the default
+      # single-commit checkout fetches no tags at all — every version would look unreleased.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Read the version and require it to be a new one
+        id: version
+        shell: bash
+        run: |
+          version=$(./gradlew -q properties --property version | sed -n 's/^version: //p')
+          if [ -z "$version" ]; then
+            echo "::error::could not read the version from build.gradle.kts"
+            exit 1
+          fi
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+            echo "::error::$tag is already released. Every push to main must bump the version in build.gradle.kts and add a CHANGELOG entry."
+            exit 1
+          fi
+          echo "::notice::releasing $tag"
+
+      - name: Build, test and bundle
+        shell: bash
+        run: ./gradlew build exeZip --stacktrace
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          # The tag does not exist yet; the action creates it at this commit.
+          tag_name: ${{ steps.version.outputs.tag }}
+          draft: true
+          generate_release_notes: true
+          # One asset, deliberately. The audience is guitarists, not developers: a release page
+          # offering a jar, two loose launchers and two different zips asks a musician to understand
+          # the difference between them before they can play a note, and the wrong choice fails in a
+          # way that reads as "the app is broken". The `.exe` bundle is the only one that needs
+          # nothing installed, so it is the only one offered.
+          #
+          # Dropping the standalone LICENSE costs nothing under GPLv3: §4 wants the licence *with
+          # the program*, and it is inside this zip already (so is README.md, which carries the
+          # third-party table and the source URL). §6(d) wants the source from the same place, and
+          # GitHub attaches the tag's source archives to every release on its own.
+          files: |
+            build/distributions/Omega-Plugin-*-Windows.zip
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-release
+          path: |
+            build/reports/tests/test
+            build/test-results/test

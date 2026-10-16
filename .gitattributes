@@ -1,0 +1,21 @@
+# Line endings are normalised on the way *into* the repository, and restored to whatever the
+# checking-out platform wants on the way out. Without this the repository stores whatever the
+# committing machine happened to have, and a Windows clone with core.autocrlf=true can put CRLF
+# into gradlew — which then fails on Linux with "bad interpreter: /bin/sh^M", an error that names
+# a file, a shell, and no cause at all.
+* text=auto
+
+# Both launchers are exceptions, in opposite directions, and both are load-bearing.
+#
+# gradlew is run by /bin/sh and must keep LF everywhere, including on the Windows machine this is
+# developed on — WSL and Git Bash both execute it. gradlew.bat is run by cmd.exe, which wants CRLF.
+# Pinning each explicitly means neither depends on a contributor's local Git configuration.
+gradlew    text eol=lf
+*.sh       text eol=lf
+gradlew.bat text eol=crlf
+*.bat      text eol=crlf
+
+# Never normalised, never diffed as text. gradle-wrapper.jar is deliberately committed — the wrapper
+# does not work without it — so it has to be declared, or a line-ending pass would corrupt it.
+*.jar binary
+*.png binary

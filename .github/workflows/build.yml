@@ -1,0 +1,80 @@
+# Compile and test on both targets.
+#
+# Ubuntu is here for a reason beyond redundancy: no part of this program has ever been executed on
+# Linux (known-issues.md §5), and while a green build is a long way from a working audio path, it is
+# the cheapest evidence there is that nothing below the backend seam has quietly grown a Windows
+# assumption. Not one test needs an audio device, and none of them touches AWT, so the Linux job
+# needs no sound server and no X display.
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, ubuntu-latest ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # fetch-depth: 0 for the version check below, which asks whether a tag already exists. The
+      # default single-commit checkout fetches no tags, so every version would look unreleased.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # settings.gradle.kts has the foojay resolver, so the toolchain would be provisioned even
+      # without this. Installing it here means the cache holds it rather than every run downloading
+      # a JDK before it can start.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The same rule release.yml enforces, checked early enough to stop a merge rather than to
+      # complain after one. Landing on main is releasing, so a change that does not bump the version
+      # cannot be released, and a pull request that forgets is better caught here than by a red X on
+      # main afterwards. Make this check required in branch protection and the merge button goes
+      # grey until the version moves.
+      #
+      # Run on one OS only: the answer cannot differ between them, and the failure message should
+      # appear once rather than twice.
+      - name: Require the version to be unreleased
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          version=$(./gradlew -q properties --property version | sed -n 's/^version: //p')
+          if [ -z "$version" ]; then
+            echo "::error::could not read the version from build.gradle.kts"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+            echo "::error::v$version is already released. Bump the version in build.gradle.kts and add a CHANGELOG entry."
+            exit 1
+          fi
+          echo "::notice::version v$version is unreleased - good"
+
+      # bash on both, deliberately: gradlew is an sh script, .gitattributes pins it to LF, and Git
+      # Bash is on the Windows runner. One command line rather than two that can drift apart.
+      - name: Build and test
+        shell: bash
+        run: ./gradlew build --stacktrace
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            build/reports/tests/test
+            build/test-results/test
