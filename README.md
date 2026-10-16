@@ -101,9 +101,9 @@ start it without them. `gradlew.bat portableZip` builds the same bundle with `.b
 instead, where `omega.bat` prints to the window directly. Neither is part of `build`, because jlink
 and jpackage cost tens of seconds on every compile.
 
-A push to `main` is a release: the workflow reads the version from `build.gradle.kts`, builds the
-zip and publishes a draft release tagged with it. Every change therefore bumps the version and adds
-a `CHANGELOG.md` entry.
+A push to `main` is a release: once the build has passed on Windows and Linux, the release workflow
+reads the version from `build.gradle.kts`, builds the zip and publishes a draft release tagged with
+it. Every change therefore bumps the version and adds a `CHANGELOG.md` entry.
 
 Linux has not been attempted. The backend seam is shaped for JACK and ALSA and the code has no
 Windows assumption below it, but that is a design claim and not a test result. `docs/linux-compat.md`

@@ -1,10 +1,16 @@
 # Publishes the artifacts a version stands for.
 #
-# The trigger is a push to main, not a tag. The version in build.gradle.kts is therefore the only
-# thing that decides whether a release happens: this reads it, and if no tag matches it yet, builds
-# the bundle and publishes a draft release at tag `v<version>`. Merging your work is the whole
-# ceremony — there is no separate tag to remember, and no way for a tag and a version to disagree,
-# because only one of them is written by hand.
+# The trigger is the `build` workflow finishing green on main — not a tag, and not the push itself:
+# a release is only cut from a commit that has compiled and passed its tests on both Windows and
+# Linux. The version in build.gradle.kts is then the only thing that decides whether a release
+# happens: this reads it, and if no tag matches it yet, builds the bundle and publishes a draft
+# release at tag `v<version>`. Merging your work is the whole ceremony — there is no separate tag
+# to remember, and no way for a tag and a version to disagree, because only one of them is written
+# by hand.
+#
+# A workflow_run job checks out the default branch's tip unless told otherwise, so the checkout
+# below pins `head_sha`: the commit the build passed on is the commit that gets released, even if
+# another push has landed since. workflow_dispatch still works for a manual run from a chosen ref.
 #
 # A push whose version is already released is a failure, deliberately. Every push to main is meant
 # to be a release, so an unbumped version is a mistake rather than a quiet no-op, and it says so:
@@ -28,7 +34,9 @@
 name: release
 
 on:
-  push:
+  workflow_run:
+    workflows: [ build ]
+    types: [ completed ]
     branches: [ main ]
   workflow_dispatch:
 
@@ -44,6 +52,8 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    # A failed or cancelled build also "completes" and fires this. Only a green one releases.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
 
     steps:
       # fetch-depth: 0 because the version check below asks whether a tag exists, and the default
@@ -51,6 +61,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-java@v4
         with:

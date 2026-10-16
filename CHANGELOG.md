@@ -9,6 +9,40 @@ unverified, it says so.
 
 ---
 
+## [1.0.67-beta] — 2026-10-15
+
+### Fixed — `gradlew` was committed without its executable bit
+
+The first push ran both workflows for the first time. Windows passed on both jobs; Ubuntu failed on
+the first line that touches the wrapper with `./gradlew: Permission denied`. The file was fine — LF
+endings, pinned by `.gitattributes` — but git stored it as mode `100644`, because it was added from
+Windows, where there is no executable bit to read and `core.filemode` is off. Git Bash on the Windows
+runner runs a script regardless of its mode, which is why one leg passed and hid the other.
+
+Fixed in the index with `git update-index --chmod=+x gradlew`, which is the only way to set it from
+Windows; the mode is now `100755`. Recorded in `CLAUDE.md` so that a re-added wrapper does not come
+back without it.
+
+### Changed — the release waits for the build
+
+The same first push showed the other half of the problem. `release.yml` ran on the push directly, so
+while Ubuntu was failing, Windows was packaging and publishing a draft of a commit that had just been
+shown not to build everywhere. The two workflows were independent, and a release is not supposed to
+be.
+
+`release.yml` now triggers on the `build` workflow completing on `main`, and its job runs only when
+that run's conclusion is success — a failed or cancelled build also "completes", so the condition is
+explicit. It checks out the commit the build passed on (`workflow_run.head_sha`) rather than the
+branch tip, so a push landing mid-run cannot slip into a release it was never tested for.
+`workflow_dispatch` still runs it by hand. The cost is that a release starts a few minutes later,
+after both build legs finish.
+
+### Changed — `CLAUDE.md` no longer describes the repository as unpublished
+
+It said there were no commits and that the workflows were unexercised. Both are now false, and the
+paragraph instead states the rule the workflows enforce: a push to `main` is a release, so every
+change bumps the version.
+
 ## [1.0.66-beta] — 2026-10-15
 
 ### Changed — README reads top-down for a guitarist, and only then for a developer

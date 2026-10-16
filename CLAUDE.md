@@ -13,11 +13,16 @@ Despite the name, this is **not** an IntelliJ Platform plugin — "plugin" here 
 `build.gradle.kts` applies `kotlin("jvm")` and `application`; there is no `plugin.xml` and no
 IntelliJ Platform dependency. Don't assume IDE APIs are on the classpath.
 
-**A git repository on `main` with no commits in it yet**, bound for
-`https://github.com/Sam-GN/Omega-Plugin` — the URL `ui/Licences.kt` and README.md already name,
-because GPLv3 §6 needs a binary's source to be reachable. `.github/workflows/` holds a build and a
-release workflow written against that destination; **both are unexercised** and stay that way until
-the first push, so treat their YAML the way you would treat an untested code path.
+**Public at `https://github.com/Sam-GN/Omega-Plugin` since 2026-10-15** — the URL `ui/Licences.kt`
+and README.md name, because GPLv3 §6 needs a binary's source to be reachable. `.github/workflows/`
+holds a build workflow (Windows and Ubuntu) and a release workflow that runs only after the build
+has passed on both; both have run. **Every push to
+`main` is a release**: the version in `build.gradle.kts` becomes the tag, so every change bumps it
+and adds a CHANGELOG entry, and the workflows fail a push that does not.
+
+The first run found `gradlew` committed without its executable bit. Windows cannot set one on the
+file, so git has to be told directly: `git update-index --chmod=+x gradlew` after any re-add of the
+wrapper. `git ls-files -s gradlew` should read `100755`.
 
 **Committing and pushing are the maintainer's, never an agent's.** Do the work, leave it in the
 working tree, hand over the commands.
