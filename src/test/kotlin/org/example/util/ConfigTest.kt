@@ -189,6 +189,23 @@ class ConfigTest {
         )
     }
 
+    /** Two boards, two eyes: closing one must not close the other, in either direction. */
+    @Test
+    fun `each board's eye is remembered on its own`() {
+        assertFalse(Config(file).apply { load() }.hideDisabledModulesSecond, "the second board shows everything too")
+
+        Config(file).apply { load() }.hideDisabledModules = true
+        val afterFirst = Config(file).apply { load() }
+        assertTrue(afterFirst.hideDisabledModules)
+        assertFalse(afterFirst.hideDisabledModulesSecond, "closing the first eye must leave the second open")
+
+        Config(file).apply { load() }.hideDisabledModulesSecond = true
+        Config(file).apply { load() }.hideDisabledModules = false
+        val afterSecond = Config(file).apply { load() }
+        assertTrue(afterSecond.hideDisabledModulesSecond, "the second eye should have persisted")
+        assertFalse(afterSecond.hideDisabledModules, "and opening the first must leave it closed")
+    }
+
     /**
      * A fresh installation must leave a file on disk before anything has been changed.
      *

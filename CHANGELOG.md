@@ -9,6 +9,30 @@ unverified, it says so.
 
 ---
 
+## [1.4.2-beta] — 2026-10-30
+
+### Changed — split mode arrives without moving anything
+
+- **The board no longer shifts when split is switched on.** The header lane was sized for the LEVEL
+  knob only while the knob was showing, so switching split on pushed every row of pedals down to
+  make room for it and switching it off pulled them back up. The lane has that room from the start
+  now, with one board and with two, and the knob and the board's name fade into it. The second board
+  still fades in below, and the first board's rows glide to their half of the window instead of
+  jumping there; the hairline between them fades with the second board.
+- **Nor does it shift when the scrollbar appears.** When two boards need more height than the
+  window has, the scrollbar used to arrive all at once and take its width from the viewport, so the
+  rows, centred in it, lurched sideways by half a scrollbar. Its column is now reserved from the
+  start, and the thumb fades in when there is something to scroll and out when there is not.
+- **Each board's eye is its own.** Hiding the switched-off pedals on the first board used to hide
+  them on the second as well, and both were one remembered setting. They are two now, remembered
+  separately, so one board can be trimmed to what is on while the other shows everything.
+- **The second board's ✕ is gone.** The fork beside the first board's eye is the one way into
+  split mode and the one way out of it; two ways out of the same thing was one too many.
+
+One new test, 353 in all: the two eyes are remembered independently, in both directions.
+
+---
+
 ## [1.4.1-beta] — 2026-10-29
 
 ### Fixed — a dropdown's width no longer follows the word on it

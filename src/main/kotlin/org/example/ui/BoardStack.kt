@@ -19,8 +19,10 @@
  */
 package org.example.ui
 
+import java.awt.AlphaComposite
 import java.awt.Dimension
 import java.awt.Graphics
+import java.awt.Graphics2D
 import java.awt.Rectangle
 import javax.swing.JPanel
 import javax.swing.JViewport
@@ -93,6 +95,8 @@ class BoardStack(private val first: ChainBoard) : JPanel(null), Scrollable {
                 revalidate()
             }
         }
+        // The first board's height follows the alpha — see doLayout — so every frame is a layout.
+        doLayout()
         repaint()
     }
 
@@ -108,9 +112,15 @@ class BoardStack(private val first: ChainBoard) : JPanel(null), Scrollable {
         // Whatever the viewport has beyond what the boards need is shared, so a roomy window keeps
         // both boards centred in their halves rather than piling the slack under the second.
         val spare = ((height - firstHeight - DIVIDER - secondHeight) / 2).coerceAtLeast(0)
-        val h1 = firstHeight + spare
+        val split = firstHeight + spare
+        // With one board the first had the whole viewport and centred its rows in it. Handing it its
+        // half in one step made those rows jump; instead its height follows the second board's fade,
+        // so the rows glide to where they will sit as the second board appears under them, and glide
+        // back as it goes. The second board is laid where it will live from the first frame.
+        val alone = maxOf((parent as? JViewport)?.height ?: height, firstHeight)
+        val h1 = alone + ((split - alone) * lower.alpha).toInt()
         first.setBounds(0, 0, w, h1)
-        lower.setBounds(0, h1 + DIVIDER, w, secondHeight + spare)
+        lower.setBounds(0, split + DIVIDER, w, secondHeight + spare)
     }
 
     override fun getPreferredSize(): Dimension {
@@ -129,9 +139,17 @@ class BoardStack(private val first: ChainBoard) : JPanel(null), Scrollable {
         super.paintComponent(g)
         val lower = second ?: return
         if (lower.alpha <= 0f) return
-        g.color = Theme.TRACK
-        val y = lower.y - DIVIDER / 2
-        g.drawLine(DIVIDER_INSET, y, width - DIVIDER_INSET, y)
+        val g2 = g.create() as Graphics2D
+        try {
+            if (lower.alpha < 1f) {
+                g2.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, lower.alpha)
+            }
+            g2.color = Theme.TRACK
+            val y = lower.y - DIVIDER / 2
+            g2.drawLine(DIVIDER_INSET, y, width - DIVIDER_INSET, y)
+        } finally {
+            g2.dispose()
+        }
     }
 
     // ------------------------------------------------------------- scrolling

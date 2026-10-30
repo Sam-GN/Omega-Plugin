@@ -107,11 +107,23 @@ class Config(private val file: Path) {
      *
      * Defaults to showing everything. A board that opened with pedals missing, on an installation
      * whose owner had forgotten the setting existed, would read as pedals that had been lost.
+     *
+     * One per board. The second board, split mode's, has [hideDisabledModulesSecond]: the two eyes
+     * were one setting at first, and a person trimming the first board to what is on wanted the
+     * second left whole.
      */
     var hideDisabledModules: Boolean
         get() = values[HIDE_DISABLED] as? Boolean ?: false
         set(value) {
             values[HIDE_DISABLED] = value
+            save()
+        }
+
+    /** The second board's eye; see [hideDisabledModules]. */
+    var hideDisabledModulesSecond: Boolean
+        get() = values[HIDE_DISABLED_SECOND] as? Boolean ?: false
+        set(value) {
+            values[HIDE_DISABLED_SECOND] = value
             save()
         }
 
@@ -206,6 +218,7 @@ class Config(private val file: Path) {
         private const val SESSION = "session"
         private const val LOGGING = "loggingEnabled"
         private const val HIDE_DISABLED = "hideDisabledModules"
+        private const val HIDE_DISABLED_SECOND = "hideDisabledModulesSecond"
 
         fun default(): Config = at(org.example.preset.PresetStore.defaultFolder())
 

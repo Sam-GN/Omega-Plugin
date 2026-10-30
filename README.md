@@ -61,7 +61,7 @@ on one laptop, and no guitar interface has been tried there yet.
   gives you an amplifier family and the `IR` pedal's dropdown a synthesised cabinet — voicings of
   the real things rather than models of them, and a capture of a real amp beats the voicing.
 - The fork beside the eye at the board's top-left splits the board in two. Both boards play at once,
-  each with its own LEVEL in its header, and the second board's ✕ or the fork again puts it away.
+  each with its own LEVEL in its header and its own eye, and the fork again puts the second away.
   Two boards each carrying an amp capture need **256 frames** or more; the status line says so.
 
 ## Latency

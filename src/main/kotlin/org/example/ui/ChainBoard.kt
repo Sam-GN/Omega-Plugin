@@ -160,13 +160,74 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
      * beside the eye on the left and against the far edge on the right, and stays in view when the
      * board scrolls — the same treatment the eye has always had.
      *
-     * The right end grows the lane to fit what it holds, so a LEVEL knob there does not overlap the
-     * first row of pedals. Hidden, it costs no height at all.
+     * The right end grows the lane to fit what it holds, **whether or not it is showing**. It holds
+     * the LEVEL knob, which is only seen in split mode, and the lane used to be sized for it only
+     * then — so switching split on pushed every row of pedals down to make room for the knob, and
+     * switching it off pulled them back up. The room is kept from the start now and the knob fades
+     * into it; see [showSplitControls].
      */
     val headerLeft: JPanel = JPanel(FlowLayout(FlowLayout.LEFT, HEADER_GAP, 0)).apply { backed() }
-    val headerRight: JPanel = JPanel(FlowLayout(FlowLayout.RIGHT, HEADER_GAP, 0)).apply {
-        backed()
+    val headerRight: FadingPanel = FadingPanel(FlowLayout(FlowLayout.RIGHT, HEADER_GAP, 0)).apply {
+        background = Theme.BACKGROUND // its own backing, painted by hand — see FadingPanel
+        alpha = 0f
         isVisible = false
+    }
+
+    /**
+     * The part of the left end that exists only in split mode — the window puts the board's name
+     * there, and adds it to [headerLeft] itself, after its own controls, so the name sits at the end
+     * of the row. Fades with [headerRight], so everything split adds to a header arrives together.
+     */
+    val splitOnly: EffectPanel.FadeRow =
+        EffectPanel.FadeRow(FlowLayout(FlowLayout.LEFT, HEADER_GAP, 0)).apply {
+            alpha = 0f
+            isVisible = false
+        }
+
+    /** True while the split-only controls are meant to be there; false while they fade out. */
+    private var splitControls = false
+
+    private val headerAnimator = javax.swing.Timer(FRAME_MS) { stepHeader() }.apply { isCoalesce = true }
+
+    /**
+     * Fades the split-only header controls in or out.
+     *
+     * In: made visible at once, so they can be used before they have fully arrived, and then
+     * dissolved in. Out: dissolved first and made invisible only once gone, so an invisible knob never
+     * takes a click. Neither changes the lane, which was sized for them all along.
+     */
+    fun showSplitControls(on: Boolean) {
+        if (splitControls == on) return
+        splitControls = on
+        if (on) {
+            headerRight.isVisible = true
+            splitOnly.isVisible = true
+            headerLeft.revalidate()
+            placeHeader()
+        }
+        headerAnimator.start()
+    }
+
+    private fun stepHeader() {
+        val target = if (splitControls) 1f else 0f
+        val next = if (kotlin.math.abs(target - headerRight.alpha) < 0.01f) {
+            target
+        } else {
+            headerRight.alpha + (target - headerRight.alpha) * EASE
+        }
+        headerRight.alpha = next
+        splitOnly.alpha = next
+        if (next == target) {
+            headerAnimator.stop()
+            if (!splitControls) {
+                headerRight.isVisible = false
+                splitOnly.isVisible = false
+                headerLeft.revalidate()
+                placeHeader()
+            }
+        }
+        headerLeft.repaint()
+        headerRight.repaint()
     }
 
     /**
@@ -477,9 +538,14 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         }
     }
 
-    /** The strip across the top that no pedal is laid into: the eye's, grown to fit a LEVEL knob. */
+    /**
+     * The strip across the top that no pedal is laid into: the eye's, grown to fit a LEVEL knob.
+     *
+     * Sized for what the right end holds even while that is hidden, so the lane is the same height
+     * with one board and with two, and switching between them moves no pedal.
+     */
     private fun laneHeight(): Int =
-        if (headerRight.isVisible && headerRight.componentCount > 0) {
+        if (headerRight.componentCount > 0) {
             maxOf(TOP_LANE, headerRight.preferredSize.height + HEADER_LANE_PAD)
         } else {
             TOP_LANE
@@ -958,6 +1024,58 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         g2.color = if (locked) Theme.DISABLED else Theme.ACCENT
         g2.fill(head)
         g2.color = previous
+    }
+
+    /**
+     * A panel that paints itself, backing included, at an alpha.
+     *
+     * Unlike [EffectPanel.FadeRow] it has a backing, because this is the header's: the backing is
+     * what keeps the controls legible over a row of pedals that has scrolled up underneath them, and
+     * a header fading in over such a row should bring its backing with it.
+     *
+     * **It must not be opaque**, and it paints that backing itself instead. An opaque component is
+     * one Swing trusts to cover every pixel, so a repaint of it alone starts at the component, into
+     * a shared back buffer that is never cleared. Painted translucently, it showed what that buffer
+     * last held at its top-left — the eye and the fork of a previous whole-board paint — ghosting
+     * through under the LEVEL knob for a frame whenever its repaint fell in a cycle of its own. Not
+     * opaque, the repaint starts at the nearest opaque ancestor and the board underneath is painted
+     * first, which is what a translucent thing has to be painted over.
+     */
+    class FadingPanel(layout: java.awt.LayoutManager) : JPanel(layout) {
+
+        /** 1 is normal; 0 paints nothing at all. */
+        var alpha: Float = 1f
+            set(value) {
+                val clamped = value.coerceIn(0f, 1f)
+                if (field == clamped) return
+                field = clamped
+                repaint()
+            }
+
+        init {
+            isOpaque = false
+        }
+
+        /** The backing, drawn by hand because the panel is not opaque; see the class comment. */
+        override fun paintComponent(g: Graphics) {
+            g.color = background
+            g.fillRect(0, 0, width, height)
+        }
+
+        override fun paint(g: Graphics) {
+            if (alpha >= 1f) {
+                super.paint(g)
+                return
+            }
+            if (alpha <= 0f) return
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha)
+                super.paint(g2)
+            } finally {
+                g2.dispose()
+            }
+        }
     }
 
     private companion object {

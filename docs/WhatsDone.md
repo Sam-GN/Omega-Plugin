@@ -100,7 +100,7 @@ OS-agnostic seam with per-OS implementations behind it.
 | AMP pedal voiced as five amplifier families, six knobs, 2× oversampled | Done | 1.4.0. Voicings, not models; a NAM capture of the real amp wins |
 | Synthesised cabinets on the IR pedal — 1x12, 2x12, 4x12, 1x10, with a MIC knob | Done | 1.4.0. The loaded file stays first and default |
 | Overdrive with a TYPE dropdown — Smooth, Screamer, Rat, Fuzz, Tube, each with its own knobs | Done | 1.3.0. The FX slot's machinery on a fixed pedal; Smooth is the original algorithm, so old presets are unchanged |
-| Split mode — a second board under the first, both heard | Done | 1.2.0. The fork beside the eye. Each board gets a LEVEL in its header at -6 dB by default, so two correlated boards sum to what one was. Saved in presets and the session as a nested block; one-board presets are unchanged |
+| Split mode — a second board under the first, both heard | Done | 1.2.0. The fork beside the eye is the way in and out. Each board gets a LEVEL in its header at -6 dB by default, so two correlated boards sum to what one was, and its own eye. Saved in presets and the session as a nested block; one-board presets are unchanged. Since 1.4.2 the header lane has room for the LEVEL from the start, so switching split on moves no pedal |
 | Fixed-width master readout | Done | Width measured from the font, not guessed; `MUTED` no longer shifts the buttons |
 | Buffer size picker beside Start, locked while running | Done | Driver-enumerated frame counts, shows frames **and** ms |
 | Sample-rate picker | Done | Same discipline; defaults to the endpoints' own current rate |

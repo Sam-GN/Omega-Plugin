@@ -410,7 +410,16 @@ A second `Board`, fed the same input and summed with the first. The rules it dep
 - **Two NAM captures want 256 frames.** One capture measured at 97.7 % of a 64-frame period. The
   window says so in the status line — on switching split on, on loading the capture, on stream
   start — and enforces nothing; `realtimeRatio` is the arbiter.
-- **The eye is one preference across both boards**, stored once in `Config.hideDisabledModules`.
+- **Each board has its own eye**, `Config.hideDisabledModules` for the first and
+  `Config.hideDisabledModulesSecond` for the second. They were one setting at first; a person who
+  trims the first board to what is on may want the second whole.
+- **The lane the LEVEL sits in is there from the start.** `ChainBoard.laneHeight` sizes it for the
+  header's right end whether or not that is showing, so switching split on moves no pedal; the knob,
+  the board name and the second board fade in, and `BoardStack` glides the first board's rows to
+  their half rather than jumping them. The scroll pane keeps its bar's column reserved
+  (`VERTICAL_SCROLLBAR_ALWAYS`) and `SlimScrollBarUI` fades the thumb, because a bar added on
+  demand narrows the viewport and the centred rows lurch sideways by half of it. The fork is the
+  only way in and out — the second board has no ✕.
 
 ### Adding to the rhythm section
 
@@ -611,7 +620,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-352 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+353 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
 it runs on Windows too. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under

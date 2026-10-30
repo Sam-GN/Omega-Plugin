@@ -132,7 +132,7 @@ class MainWindow : JFrame("Omega-Plugin") {
     }.apply { toolTipText = "Split into two boards" }
 
     /** Which board is which, shown only once there are two. */
-    private val boardLabel1 = label("BOARD 1").apply { isVisible = false }
+    private val boardLabel1 = label("BOARD 1")
     private val boardLabel2 = label("BOARD 2")
 
     /**
@@ -516,14 +516,17 @@ class MainWindow : JFrame("Omega-Plugin") {
         }
         root.add(buildTopBars(), BorderLayout.NORTH)
         // Scrolled, because a narrow window needs more rows than it has height for. The stack is
-        // Scrollable and fills the viewport whenever it fits, so the scrollbar only appears when the
-        // boards genuinely do not.
+        // Scrollable and fills the viewport whenever it fits, so the thumb only appears when the
+        // boards genuinely do not. The bar's column is reserved always, though: added on demand it
+        // narrowed the viewport by its width and the rows, centred in it, lurched sideways by half
+        // of that — exactly when split mode made the window scroll. SlimScrollBarUI fades the thumb
+        // in and out instead, so a reserved column shows nothing while there is nothing to scroll.
         root.add(
             JScrollPane(stack).apply {
                 border = BorderFactory.createEmptyBorder()
                 isOpaque = false
                 viewport.isOpaque = false
-                verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+                verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS
                 horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
                 verticalScrollBar.setUI(SlimScrollBarUI())
                 verticalScrollBar.preferredSize = Dimension(11, 0)
@@ -653,18 +656,13 @@ class MainWindow : JFrame("Omega-Plugin") {
             }
         }
 
-        // The eye is one preference, remembered once. Pressing it on either board sets both, because
-        // "hide what is off" is a statement about how this person reads a board, not about one of
-        // them. Restored before the listener is attached, so putting the saved value back does not
-        // count as a change and write it out again.
-        for (b in listOf(board, board2)) {
-            b.view.hideDisabled = config.hideDisabledModules
-            b.view.onHideDisabledChanged = { on ->
-                config.hideDisabledModules = on
-                board.view.hideDisabled = on
-                board2.view.hideDisabled = on
-            }
-        }
+        // Each board's eye is its own preference, remembered on its own: the first board can be
+        // trimmed to what is on while the second shows everything. Restored before the listener is
+        // attached, so putting the saved value back does not count as a change and write it out again.
+        board.view.hideDisabled = config.hideDisabledModules
+        board.view.onHideDisabledChanged = { on -> config.hideDisabledModules = on }
+        board2.view.hideDisabled = config.hideDisabledModulesSecond
+        board2.view.onHideDisabledChanged = { on -> config.hideDisabledModulesSecond = on }
 
         masterKnob.onChange = {
             updateMaster()
@@ -677,17 +675,18 @@ class MainWindow : JFrame("Omega-Plugin") {
         }
         updateMaster()
 
-        // The split fork sits beside the first board's eye, and the second board's ✕ is the other
-        // way out of split mode. Each board's LEVEL lives at the right end of its own header, where
-        // it is unambiguously that board's, and appears only in split mode, when it means something.
+        // The split fork sits beside the first board's eye and is the one way in and out of split
+        // mode. Each board's LEVEL lives at the right end of its own header, where it is unambiguously
+        // that board's. The LEVELs and the board names are split-only: the board fades them in and out
+        // with the second board, into a lane that has had room for them from the start.
         board.view.headerLeft.add(splitButton)
-        board.view.headerLeft.add(boardLabel1)
-        board2.view.headerLeft.add(boardLabel2)
+        // The names go last in the left end: eye, fork, BOARD 1 — the fork stays beside the eye.
+        board.view.headerLeft.add(board.view.splitOnly)
+        board2.view.headerLeft.add(board2.view.splitOnly)
+        board.view.splitOnly.add(boardLabel1)
+        board2.view.splitOnly.add(boardLabel2)
         board.view.headerRight.add(levelGroup(board, levelKnob1, levelValue1))
         board2.view.headerRight.add(levelGroup(board2, levelKnob2, levelValue2))
-        board2.view.headerRight.add(
-            EffectPanel.ClearButton { setSplit(false) }.apply { toolTipText = "Back to one board" }
-        )
         updateBoardLevels()
 
         titleBar.onMenuOpening = { menu -> buildPresetMenu(menu) }
@@ -1650,11 +1649,9 @@ class MainWindow : JFrame("Omega-Plugin") {
         splitButton.kind =
             if (on) EffectPanel.IconButton.Kind.SPLIT else EffectPanel.IconButton.Kind.SPLIT_OFF
         splitButton.toolTipText = if (on) "Back to one board" else "Split into two boards"
-        boardLabel1.isVisible = on
-        board.view.headerRight.isVisible = on
-        board2.view.headerRight.isVisible = on
+        board.view.showSplitControls(on)
+        board2.view.showSplitControls(on)
         if (on) stack.showSecond(board2.view) else stack.hideSecond()
-        board.view.revalidate()
         updateBoardLevels()
 
         if (!fromUser) return
