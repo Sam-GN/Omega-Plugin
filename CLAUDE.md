@@ -168,6 +168,14 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
   editors built on demand. It moves focus and nothing else — every field here commits on `focusLost`,
   so moving focus *is* Enter, and firing the action too would commit twice.
 
+  **Wheel notches belong to a gesture, not to what is under the pointer.** `WheelGesture` is the
+  one place that decides: the first notch of a run picks its owner — the boards' scroll pane, a
+  `Knob`, the loop board's time scroll — and notches under `GAP_MILLIS` apart go to that owner
+  however the content has moved since, a knob passing a notch it may not take up to its parent.
+  Real pointer motion ends the gesture (a toolkit listener, because content sliding under a still
+  mouse fires enter and exit events but never a move). Anything new that turns on the wheel must
+  ask `WheelGesture.take` first, or scrolling will stop on it.
+
 ### Threading contract
 
 The deadline used to be 5.8 ms and is now **1.45 ms at 64 frames, 0.36 ms at 16**. The old rules

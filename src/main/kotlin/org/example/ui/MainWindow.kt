@@ -571,6 +571,9 @@ class MainWindow : JFrame("Omega-Plugin") {
                 verticalScrollBar.preferredSize = Dimension(11, 0)
                 verticalScrollBar.isOpaque = false
                 verticalScrollBar.unitIncrement = 24
+                // A notch that scrolls the boards claims the gesture, so the knobs the content then
+                // slides under the pointer pass their notches back up here instead of turning.
+                addMouseWheelListener { WheelGesture.take(this) }
             },
             BorderLayout.CENTER,
         )

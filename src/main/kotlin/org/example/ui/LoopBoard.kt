@@ -566,7 +566,13 @@ class LoopBoard(
                 isOpaque = false
                 cursor = Cursor.getDefaultCursor()
                 addMouseWheelListener { e ->
-                    // The wheel over a waveform scrolls time, since there is nothing else to scroll here.
+                    // The wheel over a waveform scrolls time, since there is nothing else to scroll
+                    // here — unless the notch belongs to a scroll of the stack that brought the
+                    // waveform under the pointer, which carries on. See WheelGesture.
+                    if (!WheelGesture.take(this@LoopBoard)) {
+                        WheelGesture.passUp(this, e)
+                        return@addMouseWheelListener
+                    }
                     scroll.value = scroll.value + e.wheelRotation * scroll.unitIncrement * 3
                 }
                 addComponentListener(object : java.awt.event.ComponentAdapter() {

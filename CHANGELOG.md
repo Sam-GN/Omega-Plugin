@@ -9,6 +9,32 @@ unverified, it says so.
 
 ---
 
+## [1.5.2-beta] — 2026-10-30
+
+### Changed — a knob answers to the mouse only on the dial
+
+A knob's component is a box wide enough for its name and its readout, and the whole box used to
+take the mouse: a wheel notch or a drag that began beside the dial, in what looks like pedal, turned
+it. Now only the dial itself, with a few pixels of grace, and the readout where a click opens the
+editor, respond. Beside and between the knobs the pedal shows through, and a press there picks the
+pedal up to move it, as the picture always suggested.
+
+---
+
+## [1.5.1-beta] — 2026-10-30
+
+### Fixed — scrolling no longer stops on a knob
+
+Each wheel notch went to whatever was under the pointer at that instant. Scrolling from an empty
+part of the board slid a knob under the still mouse, and the next notch turned the knob instead:
+the scroll stopped and a setting had moved. Notches that arrive close together are now one gesture
+whose first notch picks the target — the scroll pane, or a knob — and every notch after it goes to
+the same place however the content has moved. Moving the mouse ends the gesture, so a hand that
+goes from one knob to the next is still turning knobs. A deliberate turn is unchanged; the loop
+board's waveforms, which scroll time under the wheel, follow the same rule.
+
+---
+
 ## [1.5.0-beta] — 2026-10-30
 
 ### Added — a loop box

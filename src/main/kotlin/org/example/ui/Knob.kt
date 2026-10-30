@@ -148,6 +148,12 @@ class Knob(val parameter: Parameter, private val compact: Boolean = false) : JCo
         addMouseListener(mouse)
         addMouseMotionListener(mouse)
         addMouseWheelListener { e ->
+            // A notch that belongs to a scroll already under way is not for this knob, however it
+            // came to be under the pointer; it goes on up to whatever is scrolling. See WheelGesture.
+            if (!WheelGesture.take(this)) {
+                WheelGesture.passUp(this, e)
+                return@addMouseWheelListener
+            }
             if (isEnabled) {
                 parameter.position -= e.wheelRotation * WHEEL_STEP
                 changed()
@@ -172,6 +178,30 @@ class Knob(val parameter: Parameter, private val compact: Boolean = false) : JCo
 
     private fun overValue(point: java.awt.Point): Boolean =
         !compact && isEnabled && editor == null && valueBounds().contains(point)
+
+    private fun knobDiameter(): Double = if (compact) 32.0 else 46.0
+
+    private fun knobCentreX(): Double = width / 2.0
+
+    private fun knobCentreY(): Double = if (compact) height / 2.0 else KNOB_TOP + knobDiameter() / 2.0
+
+    /**
+     * The knob is the circle, not the box around it.
+     *
+     * The component is a rectangle wide enough for its name and its readout, and for a long time
+     * the whole of it answered to the mouse: a wheel notch or a drag that began beside the knob, in
+     * what looks like pedal, turned it. Hit-testing is cut down to the dial itself with a little
+     * margin, plus the readout where a click means "let me type this". Everything else passes
+     * through to the pedal behind, where a press picks the pedal up to move it — which is what the
+     * picture says it should do.
+     */
+    override fun contains(x: Int, y: Int): Boolean {
+        val dx = x - knobCentreX()
+        val dy = y - knobCentreY()
+        val reach = knobDiameter() / 2.0 + HIT_MARGIN
+        if (dx * dx + dy * dy <= reach * reach) return true
+        return !compact && valueBounds().contains(x, y)
+    }
 
     /** The value with no unit, so typing over the selection replaces exactly what is wanted. */
     private fun editableText(): String {
@@ -275,9 +305,9 @@ class Knob(val parameter: Parameter, private val compact: Boolean = false) : JCo
             g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
 
             val live = isEnabled
-            val diameter = if (compact) 32.0 else 46.0
-            val cx = width / 2.0
-            val cy = if (compact) height / 2.0 else KNOB_TOP + diameter / 2.0
+            val diameter = knobDiameter()
+            val cx = knobCentreX()
+            val cy = knobCentreY()
             val position = parameter.position
 
             // The muted colour has to beat the disabled one: a muted knob is still live.
@@ -367,6 +397,9 @@ class Knob(val parameter: Parameter, private val compact: Boolean = false) : JCo
 
         /** Pixels of vertical movement before a press counts as a drag rather than a click. */
         const val DRAG_THRESHOLD = 3
+
+        /** Beyond the dial's edge that still counts as the dial: the arc's stroke, and a little grace. */
+        const val HIT_MARGIN = 4.0
 
         /** Narrow readouts still need a field wide enough to type into. */
         const val MIN_EDIT_WIDTH = 46
