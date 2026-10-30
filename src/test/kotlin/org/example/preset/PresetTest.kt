@@ -208,6 +208,105 @@ class PresetCaptureTest {
     }
 
     @Test
+    fun `a split preset carries its second board through the json round trip`() {
+        val first = chain()
+        first[1].parameters[0].value = -12f
+        val second = chain().drop(1) // no master on the second board
+        second[0].parameters[0].value = 9f
+        second[2].enabled = true
+        val preset = Preset.capture(
+            "Two boards",
+            first.drop(1),
+            first,
+            split = Preset.capture("", second, second, files = mapOf("NAM" to Preset.FileRef("B.nam", "/amps/B.nam"))),
+        )
+        val restored = Preset.fromJsonValue(Json.parse(Json.write(preset.toJsonValue())))
+        assertEquals(preset, restored)
+        val nested = restored!!.split
+        assertTrue(nested != null, "the second board came back")
+        assertEquals("", nested!!.name, "the second board has no name of its own")
+        assertEquals(9f, nested.values["Gain.Gain"])
+        assertTrue(nested.enabled.getValue("Delay"))
+        assertEquals("/amps/B.nam", nested.files["NAM"]?.path)
+        // The outer board is untouched by the inner one.
+        assertEquals(-12f, restored.values["Gain.Gain"])
+    }
+
+    @Test
+    fun `a typed pedal keeps every type's knobs through the json round trip`() {
+        val source = chain()
+        val overdrive = source.first { it.name == "Overdrive" } as Overdrive
+        overdrive.applyValues(mapOf("Rat.Distortion" to 55f, "Fuzz.Volume" to 0.9f))
+        overdrive.selectType("Rat")
+        val preset = Preset.capture("Ratty", source.drop(1), source)
+
+        val module = preset.modules["Overdrive"]
+        assertTrue(module != null, "the overdrive is recorded under its own name")
+        assertEquals("Rat", module!!.type)
+        assertEquals(55f, module.values["Rat.Distortion"])
+        assertEquals(0.9f, module.values["Fuzz.Volume"], "an unselected type's knobs are kept too")
+
+        val restored = Preset.fromJsonValue(Json.parse(Json.write(preset.toJsonValue())))
+        assertEquals(preset, restored)
+        assertEquals("Rat", restored!!.modules["Overdrive"]?.type)
+    }
+
+    @Test
+    fun `a preset from before the drive types lands on the default drive`() {
+        // Flat keys and no modules block, which is what every preset saved before 1.3.0 looks like.
+        val older = """
+            {"name":"Older","order":["Overdrive","Gain"],"enabled":{"Overdrive":true},
+             "values":{"Overdrive.Drive":22.0,"Overdrive.Tone":1500.0,"Overdrive.Level":0.9}}
+        """.trimIndent()
+        val preset = Preset.fromJsonValue(Json.parse(older))!!
+        assertEquals(emptyMap(), preset.modules)
+
+        val target = chain()
+        val overdrive = target.first { it.name == "Overdrive" } as Overdrive
+        // The window puts a typed pedal on the preset's type — or the default — before applying,
+        // because the flat keys belong to whichever type's knobs are showing. Mirrored here.
+        overdrive.selectType(preset.modules["Overdrive"]?.type ?: overdrive.typeNames.first())
+        preset.applyTo(target)
+        assertEquals("Smooth", overdrive.typeName)
+        assertEquals(22f, overdrive.drive.value)
+        assertEquals(1500f, overdrive.tone.value)
+        assertEquals(0.9f, overdrive.level.value)
+        assertTrue(overdrive.enabled)
+    }
+
+    @Test
+    fun `a chain without a typed pedal writes no modules block`() {
+        val source = listOf(MasterVolume(), Gain(), Delay())
+        val text = Json.write(Preset.capture("Plain", source.drop(1), source).toJsonValue())
+        assertTrue(!text.contains("\"modules\""), text)
+    }
+
+    @Test
+    fun `a preset saved with one board says nothing about a second`() {
+        val source = chain()
+        val text = Json.write(Preset.capture("One board", source.drop(1), source).toJsonValue())
+        // Absent rather than null, so a one-board preset reads exactly as it did before split
+        // existed — and a build from before split reads a two-board one as one board.
+        assertTrue(!text.contains("\"split\""), text)
+        assertNull(Preset.fromJsonValue(Json.parse(text))!!.split)
+    }
+
+    @Test
+    fun `a nested second board loads without a name, and never nests a third`() {
+        val text = """
+            {"name":"Outer","order":["Gain"],"enabled":{},"values":{},
+             "split":{"order":["Delay"],"enabled":{"Delay":true},"values":{"Delay.Time":250.0},
+                      "split":{"order":["Reverb"],"enabled":{},"values":{}}}}
+        """.trimIndent()
+        val restored = Preset.fromJsonValue(Json.parse(text))!!
+        val nested = restored.split
+        assertTrue(nested != null, "a nameless second board is still a second board")
+        assertEquals(listOf("Delay"), nested!!.order)
+        assertEquals(250f, nested.values["Delay.Time"])
+        assertNull(nested.split, "one level only")
+    }
+
+    @Test
     fun `a preset whose modules load no files writes nothing about them`() {
         val source = chain()
         val preset = Preset.capture("No amp", source.drop(1), source)

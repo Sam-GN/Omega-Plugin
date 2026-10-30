@@ -21,6 +21,7 @@ package org.example.preset
 
 import org.example.dsp.AudioProcessor
 import org.example.dsp.FxSlot
+import org.example.dsp.TypedModule
 
 /**
  * A saved sound: pedal order, every knob, every switch.
@@ -64,6 +65,29 @@ data class Preset(
      * list before the rest of the preset is applied.
      */
     val fx: List<Fx> = emptyList(),
+    /**
+     * The second board, when the sound was saved in split mode; null means one board.
+     *
+     * A whole preset nested rather than a second set of maps alongside the first, because the two
+     * boards carry the same module names — a preset keyed by effect name cannot hold two Delays in
+     * one map. Its own name is blank; the sound has one name, which is the outer one. The master is
+     * not in it, since there is one master after the sum, and it lives in the outer maps as before.
+     *
+     * Absent when split is off, so a preset saved with one board reads exactly as it always did, and
+     * a build from before split existed reads one of these as one board and ignores the rest.
+     */
+    val split: Preset? = null,
+    /**
+     * The fixed pedals that are one of several things — the Overdrive and its drive types — keyed
+     * by the pedal's name: which type each is, and every type's knobs.
+     *
+     * The same shape as an [fx] entry and for the same reason: a module that holds several effects
+     * has knobs the flat [values] map cannot tell apart, since `Level` on the Rat is not `Level` on
+     * the Tube. Keyed by name rather than positional because these pedals, unlike slots, have a
+     * fixed identity. Absent for a sound saved before any such pedal existed, and the flat values
+     * then land on the default type as they always did.
+     */
+    val modules: Map<String, Fx> = emptyMap(),
 ) {
 
     /**
@@ -106,6 +130,8 @@ data class Preset(
         // Likewise absent when the board has no slots, so a sound built entirely from the fixed
         // modules reads exactly as it did before slots existed.
         if (fx.isNotEmpty()) this["fx"] = fx.map { it.toJsonValue() }
+        if (modules.isNotEmpty()) this["modules"] = modules.mapValues { it.value.toJsonValue() }
+        split?.let { this["split"] = it.toJsonValue() }
     }
 
     /**
@@ -140,12 +166,17 @@ data class Preset(
 
     companion object {
 
-        /** Snapshots the current sound. [order] is the pedals; [all] is everything including master. */
+        /**
+         * Snapshots the current sound. [order] is the pedals; [all] is everything on that board
+         * including what is pinned around it — the master and the board's own LEVEL. [split] is the
+         * second board, captured the same way with a blank name, or null with one board.
+         */
         fun capture(
             name: String,
             order: List<AudioProcessor>,
             all: List<AudioProcessor>,
             files: Map<String, FileRef> = emptyMap(),
+            split: Preset? = null,
         ): Preset {
             val values = LinkedHashMap<String, Float>()
             val enabled = LinkedHashMap<String, Boolean>()
@@ -159,13 +190,26 @@ data class Preset(
             // board and [order] is what that position means. The master is not on the board and can
             // never be a slot.
             val fx = order.filterIsInstance<FxSlot>().map { Fx(it.typeName, it.captureValues()) }
-            return Preset(name, order.map { it.name }, enabled, values, files, fx)
+            // Every typed pedal that is not a slot: slots are positional and go in [fx]; these have
+            // names and go under them.
+            val modules = LinkedHashMap<String, Fx>()
+            for (effect in all) {
+                if (effect is TypedModule && effect !is FxSlot) {
+                    modules[effect.name] = Fx(effect.typeName, effect.captureValues())
+                }
+            }
+            return Preset(name, order.map { it.name }, enabled, values, files, fx, split, modules)
         }
 
-        /** Returns null rather than throwing: one bad entry must not cost the whole file. */
-        fun fromJsonValue(value: Any?): Preset? {
+        /**
+         * Returns null rather than throwing: one bad entry must not cost the whole file.
+         *
+         * [nested] is the second board inside a split preset, which has no name of its own — the
+         * outer preset carries it — so a missing name there is not the malformation it is at the top.
+         */
+        fun fromJsonValue(value: Any?, nested: Boolean = false): Preset? {
             val map = value as? Map<*, *> ?: return null
-            val name = map["name"] as? String ?: return null
+            val name = map["name"] as? String ?: if (nested) "" else return null
             val order = (map["order"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
             val enabled = (map["enabled"] as? Map<*, *>)
                 ?.mapNotNull { (k, v) -> (k as? String)?.let { key -> (v as? Boolean)?.let { key to it } } }
@@ -190,19 +234,32 @@ data class Preset(
             // A preset written before slots existed has no "fx" at all, and an empty list is the
             // correct reading of that: no slots on the board. Entries without a type are dropped
             // rather than defaulted, because a slot whose identity is unknown is not a slot.
-            val fx = (map["fx"] as? List<*>)?.mapNotNull { entry ->
-                val slot = entry as? Map<*, *> ?: return@mapNotNull null
-                val type = slot["type"] as? String ?: return@mapNotNull null
-                val slotValues = (slot["values"] as? Map<*, *>)
-                    ?.mapNotNull { (k, v) ->
-                        (k as? String)?.let { key -> (v as? Double)?.let { key to it.toFloat() } }
-                    }
-                    ?.toMap()
-                    ?: emptyMap()
-                Fx(type, slotValues)
-            } ?: emptyList()
+            val fx = (map["fx"] as? List<*>)?.mapNotNull { fxEntry(it) } ?: emptyList()
 
-            return Preset(name, order, enabled, values, files, fx)
+            val modules = LinkedHashMap<String, Fx>()
+            (map["modules"] as? Map<*, *>)?.forEach { (key, value) ->
+                val module = key as? String ?: return@forEach
+                fxEntry(value)?.let { modules[module] = it }
+            }
+
+            // One level only. A second board that itself claimed a second board would be a file
+            // from nowhere this program has been, and reading it as one board is the safe answer.
+            val split = if (nested) null else fromJsonValue(map["split"], nested = true)
+
+            return Preset(name, order, enabled, values, files, fx, split, modules)
+        }
+
+        /** One typed entry — a slot in `fx`, or a named module — or null if it has no type. */
+        private fun fxEntry(value: Any?): Fx? {
+            val entry = value as? Map<*, *> ?: return null
+            val type = entry["type"] as? String ?: return null
+            val entryValues = (entry["values"] as? Map<*, *>)
+                ?.mapNotNull { (k, v) ->
+                    (k as? String)?.let { key -> (v as? Double)?.let { key to it.toFloat() } }
+                }
+                ?.toMap()
+                ?: emptyMap()
+            return Fx(type, entryValues)
         }
 
         private fun fileRef(value: Any?): FileRef? {

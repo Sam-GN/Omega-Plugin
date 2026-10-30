@@ -568,11 +568,15 @@ class TransportTest {
     fun `drum patterns exist where they make sense and not where they do not`() {
         fun named(signature: TimeSignature) = Feels.forSignature(signature).map { it.name }
         assertTrue(named(TimeSignature.FOUR_FOUR).containsAll(listOf("Rock", "Half-time", "Shuffle")))
-        assertTrue(named(TimeSignature.THREE_FOUR).contains("Waltz"))
-        assertTrue(named(TimeSignature.SIX_EIGHT).contains("Ballad"))
-        assertTrue(named(TimeSignature.TWELVE_EIGHT).contains("Slow blues"))
-        // 2/4's march is a click on 1 and 2, which the click styles already are.
-        assertTrue(Feels.forSignature(TimeSignature.TWO_FOUR).all { it.isClickOnly })
+        assertTrue(named(TimeSignature.THREE_FOUR).containsAll(listOf("Waltz", "Jazz waltz", "Rock waltz")))
+        assertTrue(named(TimeSignature.SIX_EIGHT).containsAll(listOf("Ballad", "Jig", "Driving")))
+        assertTrue(named(TimeSignature.TWELVE_EIGHT).containsAll(listOf("Slow blues", "Driving", "Doo-wop")))
+        assertTrue(named(TimeSignature.TWO_FOUR).containsAll(listOf("March", "Polka", "Train")))
+        // Since 1.2.2 every bar has a kit to play against, not only the common ones.
+        for (signature in TimeSignature.entries) {
+            val drums = Feels.forSignature(signature).count { !it.isClickOnly }
+            assertTrue(drums >= 2, "$signature has $drums drum pattern(s); every bar should have at least two")
+        }
         // Clicks come first in every list, so the dropdown never opens on a drum kit.
         for (signature in TimeSignature.entries) {
             val feels = Feels.forSignature(signature)

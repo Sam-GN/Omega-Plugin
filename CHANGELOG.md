@@ -9,6 +9,169 @@ unverified, it says so.
 
 ---
 
+## [1.3.0-beta] — 2026-10-29
+
+### Added — the Overdrive is five drives, from a dropdown
+
+The Overdrive pedal has a TYPE dropdown on its header, like an FX slot, and the knob row is the
+chosen type's own: three on a Screamer, two on a fuzz, four on a tube stage. One pedal in one fixed
+place on the board, doing the job of a row of them. Switching type is a short fade rather than a
+click, is allowed while the stream runs, and every type is built and warmed before the stream
+starts, so the first time one is chosen it is already compiled.
+
+| Type | Knobs | What it is |
+| --- | --- | --- |
+| Smooth | Drive, Tone, Level | the pedal's original `tanh` soft clip, unchanged, and the default |
+| Screamer | Drive, Tone, Level | high-pass at 720 Hz into a mildly asymmetric soft clip, a +4 dB hump at 800 Hz |
+| Rat | Distortion, Filter, Volume | hard clip; Filter is a low-pass that closes as it is turned up, 6 kHz down to 400 Hz |
+| Fuzz | Fuzz, Volume | full bass into a hard asymmetric clip; the bias grows as the note dies, so it sputters on the decay |
+| Tube | Gain, Bass, Treble, Level | soft clip with a fixed bias for second harmonic, then a bass and a treble shelf |
+
+These are voicings in the style of those pedals — the clipping shape and the filters that family
+has — not models of a circuit. A NAM capture is what a real one sounds like.
+
+- **Presets.** A preset records the Overdrive under its own name in a new `modules` block: which
+  type, and every type's knobs, so switching away from a dialled-in Rat and back returns it. A
+  preset from before this version has no such block and flat `Overdrive.Drive` keys; those land on
+  Smooth, which has the same three knobs under the same names, so every existing preset loads
+  sounding exactly as it did. A preset saved now and opened by an older build loses only the type.
+- **Every drive is tested at its loudest**, with a full-scale square and a sine at 44.1 and 96 kHz,
+  to stay inside full scale: a drive that clipped the engine would be the loudest possible bug.
+  Each is also asserted silent on silence — the two biased ones subtract the clipper's resting value,
+  so switching the pedal on is not a thump — and asserted to actually add harmonics to a sine.
+  Smooth is checked sample for sample against the original formula.
+
+### Changed — inside
+
+- The type-switching core of `FxSlot` — one instance of every type, the fade across a switch, the
+  per-type knob capture — is now `TypedModule`, and both `FxSlot` and `Overdrive` are one. The slot
+  keeps its numbering and its plus and ✕; the Overdrive keeps its fixed name and place.
+- The five drives live in `dsp/Drives.kt`. `SmoothDrive` is the old `Overdrive` class renamed.
+- Eleven new tests, 336 in all.
+
+---
+
+## [1.2.2-beta] — 2026-10-29
+
+### Added — two or three drum patterns in every bar
+
+The kit used to offer three feels in 4/4 and one each in 3/4, 6/8 and 12/8, and nothing in 2/4.
+Every signature now has at least two drum patterns, and the new ones are chosen to be different
+things to play against rather than variations on one. All are grids in `Feels.grooves`, synthesised
+like everything else in the rhythm section — nothing sampled ships.
+
+- **2/4** — `March` (kick on both beats, snare on 2), `Polka` (kick on the beats, snare on the
+  off-beats), `Train` (the country train beat: snare sixteenths with the backbeat accented, over a
+  kick on both beats — the one pattern in the catalogue with four steps to the pulse).
+- **3/4** — `Jazz waltz` (the swung ride figure 1, 2, and-of-2, 3, with a cross-stick on 3) and
+  `Rock waltz` (full snare on 3, kick pushing in on the and-of-2), beside the existing `Waltz`.
+- **6/8** — `Jig` (kick on both pulses, side-stick on the third eighth of each) and `Driving` (the
+  rock 6/8: backbeat on the second pulse, kick on the last eighth leading back to 1), beside
+  `Ballad`.
+- **12/8** — `Driving` (slow blues with every pulse accented on the hats and a kick on the third
+  eighth of 1 and 3) and `Doo-wop` (soft triplets throughout, side-stick on 2 and 4), beside
+  `Slow blues`.
+
+`Driving` is named the same in 6/8 and 12/8 on purpose: SIG changes keep the feel by name where the
+new bar has one, so moving between the two compound bars stays on the same kind of groove. 4/4 is
+unchanged at `Rock`, `Half-time` and `Shuffle`. The warm-up walks the whole catalogue, so every new
+pattern is compiled before the stream starts, and the existing test that checks every pattern's step
+table against its bar covers them all.
+
+---
+
+## [1.2.1-beta] — 2026-10-29
+
+### Fixed — the board's header stays on top when it scrolls
+
+The eye, the split fork and a board's LEVEL are pinned to the top of what is on screen, but they
+were painted *beneath* the pedals: Swing paints children from the highest index down, and the header
+was added after them. In its lane nothing overlapped it, so nobody saw it. Scroll a board — which
+split mode makes routine — and the pedals slid straight over the controls.
+
+The header is now raised to the front of the stacking order whenever it is placed and again when a
+dragged pedal is dropped (a lifted pedal is raised for the length of its drag and had been staying
+there), and it has an opaque backing in the board's own background colour, so the controls stay
+legible over a pedal passing underneath rather than merely drawn over it.
+
+---
+
+## [1.2.0-beta] — 2026-10-29
+
+### Added — split mode: two boards, one guitar
+
+A fork icon beside the eye at the board's top-left. Press it and a **second board** fades in under
+the first, carrying every module the first has — gate to reverb, its own FX slots, its own NAM and
+IR — fed the same guitar and heard with it. One sound can now be a clean amp and a driven one at
+once, or a dry signal beside a delayed one. The icon is grey in both states, as every header glyph
+is, and struck through while there is one board: the line says what is true now, and pressing it
+removes it. The second board's ✕, at the far right of its header, is the other way out.
+
+- **Each board gets a LEVEL** in its header, shown only in split mode: the same compact knob and
+  readout as MASTER, click to mute. It sits at the **end** of its board, just before the two are
+  summed, for the reason the master moved there (below) — a level ahead of the drive would change
+  the distortion as well as the loudness. Default 71 %, which through the knob's squared taper is a
+  gain of 0.504, a hair under -6 dB. Two boards fed the same guitar are correlated, so their
+  amplitudes add; two at that gain sum back to the level one board had, which is what keeps
+  switching split on from clipping. With split off the LEVELs are inactive — ramped to unity and
+  then not touching the buffer, bit for bit — so a one-board sound is exactly what it was.
+- **Switching is allowed while the stream runs**, unlike adding or removing a module. Nothing is
+  added to a chain: the second board is always prepared and warmed, and the engine fades its share
+  of the output in and out over the master's own 11 ms rather than switching it. Off, the second
+  board is run only until its fade finishes and then not at all, so it costs nothing idle. The
+  engine test asserts the fade never steps the output by more than a hundredth, and that the
+  callback still allocates nothing with both boards running.
+- **Saved.** A preset or session written in split mode carries the second board as a nested
+  `split` block — a whole preset inside the preset, because both boards use the same module names
+  and one map cannot hold two Delays. A sound saved with one board writes no such block and reads
+  exactly as it did before, and a build from before this version reads a split preset as its first
+  board. With split off the second board is not saved, but it keeps its settings for as long as the
+  program runs, so switching off and on again returns what was there.
+- **Two amp captures need a bigger buffer, and the program says so.** One capture measured at
+  97.7 % of a 64-frame period, so two will not fit at 64 and are on the line at 128. When both boards
+  carry a capture at under 256 frames, the status line says to set BUFFER to 256 or more — when
+  split is switched on, when the capture is loaded, and when the stream starts. Said rather than
+  enforced: a faster machine may manage, and `realtimeRatio` tells the truth either way.
+- `--selftest --chain --split` runs the shipping chain on two boards, summed, which is the heaviest
+  the program can be put without a file on disk. Measured on this machine over the virtual cable at
+  264 frames with `--stress`: worst callback 0.30 ms with one board and 0.23 ms with two, which is
+  to say the second board's cost is below the variation between runs at that buffer size. The chain
+  without captures was never the expensive part; two NAM captures are, and that is the case the
+  256-frame advice is for.
+
+### Changed — the master is now last
+
+The master volume used to be **first** in the chain, ahead of the gate. That made it an input trim
+rather than a master: turning it down fed less into the compressor, the gate and the overdrive, so
+it changed how hard the drive was pushed as well as how loud the sound was. It is now after the
+boards are summed and before the rhythm section, and changes only the loudness of the finished sound.
+
+- Existing presets load unchanged — the master was never in a preset's order, only pinned by code.
+  But the drive, the gate and the compressor now hear the pickup directly rather than through the
+  master's default 80 %, which was a gain of 0.64. A sound dialled in before this plays about 4 dB
+  hotter into the drive and the gate opens a touch more easily. Expect to nudge a gain or a
+  threshold on a sound you had set up.
+- The metronome is unaffected either way: it is mixed after the master and has its own LEVEL.
+- `MasterVolume` and the new `BoardLevel` are both a `VolumeStage`, one class with the ramped mute
+  and the taper, so the two cannot drift apart.
+
+### Changed — inside
+
+- `MainWindow` no longer owns the pedals. Everything that belongs to one board — the effects, the
+  chain, the picture, which file its NAM loaded, which of its FX slots is first — moved into
+  `ui/Board.kt`, so it can exist twice. The window keeps what there is one of: the master, the
+  devices, the session, the presets.
+- `AudioEngine` takes an optional second chain and an optional post chain. The warm-up covers all
+  three, and the headless callers that pass one chain are unchanged.
+- `ChainBoard` has a header lane with two ends: the eye and the fork on the left, the LEVEL and the
+  ✕ on the right, pinned to the top of what is on screen as the eye always was. A new `BoardStack`
+  holds one or two boards in the scroll view and fades the second in and out.
+- The eye is one preference for both boards: pressing it on either hides switched-off pedals on both.
+- Twelve new tests, 325 in all: the second bus, its fade, the post stage on the sum, allocation with
+  two boards running, the nested preset, and the level stage's bit-transparency when inactive.
+
+---
+
 ## [1.1.0-beta] — 2026-10-29
 
 ### Added — Linux, as an AppImage

@@ -49,7 +49,56 @@ class AudioEngine(
      * as a property rather than hidden because the UI owns every one of its controls.
      */
     val rhythm: Transport = Transport(),
+    /**
+     * The second board, fed the same input as [chain] and summed with it — or null where there is
+     * only one board, which is every headless caller.
+     *
+     * Always prepared and warmed when present, whether or not [split] is on: split is switched while
+     * the stream runs, and a board that was first prepared at that moment would be class loading
+     * against the deadline. Its cost while off is nothing — it is not run at all once its fade has
+     * finished.
+     */
+    private val second: EffectChain? = null,
+    /**
+     * What runs on the sum of the boards: the master. After the fork rather than before it, so that
+     * a master is a master and not an input trim, and so that one knob covers both boards.
+     */
+    private val post: EffectChain? = null,
 ) : AudioCallback {
+
+    private val chains: List<EffectChain> = listOfNotNull(chain, second, post)
+
+    /**
+     * Whether the second board is heard.
+     *
+     * One volatile store from the UI, like a pedal's switch. The audio thread does not step on it:
+     * [blend] ramps the second board's share of the output over about [BLEND_SECONDS] in either
+     * direction, so switching split on or off is a short fade rather than a click. Off, the second
+     * board keeps being run until its fade has finished and is then left alone.
+     */
+    @Volatile
+    var split = false
+
+    /** The second board's share of the output, 0..1. Written by the audio thread, once per block. */
+    @Volatile
+    private var blend = 0f
+
+    private var blendSmoothing = 1f - exp(-1f / (44_100f * BLEND_SECONDS))
+
+    /**
+     * Where the second board renders. Sized in [prepareChain]; the constructor's size is for callers
+     * that never open a device, which is the headless tests.
+     */
+    private var scratch = FloatArray(DEFAULT_SCRATCH_FRAMES)
+
+    /**
+     * True while the second board is still being run: split on, or its fade-out not finished yet.
+     *
+     * What the UI consults before clearing the second board's state on the way *into* split mode —
+     * a delay tail from the last time it was on is not part of the sound being switched to, and a
+     * `reset` is only safe to call from another thread while the audio thread is not in `process`.
+     */
+    val secondRunning: Boolean get() = second != null && (split || blend > 0f)
 
     /**
      * Output meter, with real ballistics.
@@ -292,8 +341,15 @@ class AudioEngine(
      * never on the audio thread — every allocation an effect needs happens here.
      */
     private fun prepareChain(format: StreamFormat) {
-        chain.prepare(format.sampleRate.toFloat(), format.bufferFrames)
-        chain.reset()
+        for (c in chains) {
+            c.prepare(format.sampleRate.toFloat(), format.bufferFrames)
+            c.reset()
+        }
+        if (scratch.size < format.bufferFrames) scratch = FloatArray(format.bufferFrames)
+        blendSmoothing = 1f - exp(-1f / (format.sampleRate * BLEND_SECONDS))
+        // A fresh stream starts the second board from silence and fades it in if split is on, the
+        // same way it would have arrived had the switch been pressed after Start.
+        blend = 0f
         // Same rule as every effect: nothing in the rhythm section may derive a coefficient from a
         // hardcoded 44 100, so its tick oscillators and envelopes are rebuilt at the rate the driver
         // actually granted.
@@ -328,11 +384,14 @@ class AudioEngine(
         val frames = format.bufferFrames
         val input = FloatArray(frames)
         val output = FloatArray(frames)
-        val wasEnabled = chain.effects.map { it.enabled }
-        val reserves = chain.effects.flatMap { it.alternates }.distinctBy { it.javaClass }
+        // Every chain, not just the first: the second board is reached by a switch pressed while
+        // the stream runs, and the master now sits in a chain of its own after the sum.
+        val effects = chains.flatMap { it.effects.asList() }
+        val wasEnabled = effects.map { it.enabled }
+        val reserves = effects.flatMap { it.alternates }.distinctBy { it.javaClass }
         // Transport is in the set because it runs on the audio thread and is not in the chain, so
         // nothing else here would ever record it as warmed.
-        val classes = chain.effects.map { it.javaClass } + reserves.map { it.javaClass } +
+        val classes = effects.map { it.javaClass } + reserves.map { it.javaClass } +
             Transport::class.java
 
         val cold = !warmedClasses.containsAll(classes)
@@ -353,13 +412,15 @@ class AudioEngine(
         val warmFrames = minOf(frames, WARMUP_FRAMES)
 
         try {
-            chain.effects.forEach { it.enabled = true }
+            effects.forEach { it.enabled = true }
             // A little noise rather than pure silence, so branches that depend on signal level get
             // profiled too and denormal-flushing paths are exercised.
             for (i in input.indices) input[i] = ((i * 2654435761L.toInt()) shr 8) * 1e-9f
             repeat(blocks) { block ->
-                System.arraycopy(input, 0, output, 0, warmFrames)
-                chain.process(output, warmFrames)
+                for (c in chains) {
+                    System.arraycopy(input, 0, output, 0, warmFrames)
+                    c.process(output, warmFrames)
+                }
                 if (block % step == 0) report(WARMING, CHAIN_SHARE * block / blocks)
             }
 
@@ -368,8 +429,10 @@ class AudioEngine(
             // taken at least once before the deadline is real. Cheap: a handful of blocks, not four
             // hundred.
             repeat(FULL_SIZE_BLOCKS) {
-                System.arraycopy(input, 0, output, 0, frames)
-                chain.process(output, frames)
+                for (c in chains) {
+                    System.arraycopy(input, 0, output, 0, frames)
+                    c.process(output, frames)
+                }
             }
 
             // An FX slot runs one of its types and holds the rest in reserve, so the pass above has
@@ -402,8 +465,8 @@ class AudioEngine(
             // A chain that throws during warm-up will throw in the callback too, but the callback
             // handles it; failing the whole start here would be worse.
         } finally {
-            chain.effects.forEachIndexed { i, effect -> effect.enabled = wasEnabled[i] }
-            chain.reset()
+            effects.forEachIndexed { i, effect -> effect.enabled = wasEnabled[i] }
+            chains.forEach { it.reset() }
         }
     }
 
@@ -484,6 +547,18 @@ class AudioEngine(
         try {
             System.arraycopy(input, 0, output, 0, frames)
             chain.process(output, frames)
+            // The second board gets the same input, renders into its own buffer and is added to the
+            // first. Run while split is on and for as long afterwards as its fade-out takes; after
+            // that it costs nothing. The size check is the one guard a headless caller needs.
+            val b = second
+            if (b != null && (split || blend > 0f) && scratch.size >= frames) {
+                System.arraycopy(input, 0, scratch, 0, frames)
+                b.process(scratch, frames)
+                mixSecond(output, frames)
+            }
+            // The master, on the sum. After the fork, so one knob governs both boards and turning
+            // it down changes how loud the sound is rather than how hard the drives are hit.
+            post?.process(output, frames)
             // Recorded *before* the clamp. The file is 32-bit float, which has headroom above
             // 0 dBFS, so a take driven into the clip keeps its peaks and can be pulled back down
             // later — capturing after the clamp would record the damage instead.
@@ -527,7 +602,41 @@ class AudioEngine(
         loadPercent = spent.toFloat() / periodNanos
     }
 
+    /**
+     * Adds the second board's buffer into [output] at its current share, ramping that share towards
+     * where [split] says it should be.
+     *
+     * The same exponential approach [org.example.dsp.VolumeStage] uses, snapped at the same
+     * distance, so the common case — split on and settled — is a plain add with no multiply, and
+     * split off reaches an exact zero after which the board stops being run at all.
+     */
+    private fun mixSecond(output: FloatArray, frames: Int) {
+        val target = if (split) 1f else 0f
+        var g = blend
+        if (abs(target - g) < BLEND_SNAP) g = target
+        val bus = scratch
+        if (g == target) {
+            if (g == 1f) for (i in 0 until frames) output[i] += bus[i]
+        } else {
+            val s = blendSmoothing
+            for (i in 0 until frames) {
+                g += (target - g) * s
+                output[i] += g * bus[i]
+            }
+        }
+        blend = g
+    }
+
     private companion object {
+        /** How long switching split on or off takes to fade: the master's own mute time. */
+        const val BLEND_SECONDS = 500f / 44_100f
+
+        /** -80 dB of the remaining distance, at which the blend is called arrived. */
+        const val BLEND_SNAP = 1e-4f
+
+        /** Room for the second board before a device has said how big a block is. */
+        const val DEFAULT_SCRATCH_FRAMES = 8192
+
         /**
          * Enough to get every hot method through C1 into C2 — the tiered compilation threshold for
          * C2 is 10 000 invocations, and each block is thousands of loop iterations.

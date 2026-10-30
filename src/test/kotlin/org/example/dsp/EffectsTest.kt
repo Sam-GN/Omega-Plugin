@@ -23,6 +23,7 @@ import org.example.audio.AudioConfig
 import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -118,6 +119,63 @@ class MasterVolumeTest {
     }
 }
 
+class BoardLevelTest {
+
+    @Test
+    fun `inactive it is bit-transparent whatever the knob and the switch say`() {
+        // Outside split mode the stage is still in the chain, and a stage that merely got within a
+        // rounding error of unity would be one you could not leave there.
+        val level = BoardLevel()
+        level.volume.value = 10f
+        level.enabled = false
+        level.reset()
+
+        val input = FloatArray(512) { sin(it * 0.07).toFloat() * 0.6f }
+        val buffer = input.copyOf()
+        level.process(buffer, buffer.size)
+
+        assertContentEquals(input, buffer)
+    }
+
+    @Test
+    fun `active at its default it sits at minus six dB`() {
+        // 71 % through the squared taper is 0.71² = 0.504, a hair under -6 dB. Two boards fed the
+        // same guitar are correlated, so two at that gain sum back to the level one board had —
+        // which is what keeps switching split on from clipping.
+        val level = BoardLevel()
+        level.active = true
+        level.reset()
+
+        val buffer = FloatArray(256) { 0.8f }
+        level.process(buffer, buffer.size)
+
+        assertEquals(0.8f * 0.71f * 0.71f, buffer.last(), 1e-4f)
+    }
+
+    @Test
+    fun `going inactive ramps back to unity and then stops touching the buffer`() {
+        val level = BoardLevel()
+        level.active = true
+        level.reset() // at 0.5
+        level.active = false
+
+        val ramp = FloatArray(8192) { 1f }
+        level.process(ramp, ramp.size)
+        assertTrue(ramp[0] < 0.51f, "the return to unity started from where it was, got ${ramp[0]}")
+        for (i in 1 until ramp.size) {
+            assertTrue(ramp[i] >= ramp[i - 1] - 1e-6f, "ramp still rising at sample $i")
+        }
+        // 8192 samples is 186 ms at 44.1 kHz, against an 11 ms time constant: within a rounding
+        // error of unity, and the snap at the start of the next block makes it exact.
+        assertTrue(ramp.last() > 0.9999f, "all but arrived, got ${ramp.last()}")
+
+        val input = FloatArray(256) { sin(it * 0.05).toFloat() }
+        val after = input.copyOf()
+        level.process(after, after.size)
+        assertContentEquals(input, after)
+    }
+}
+
 class GainTest {
 
     @Test
@@ -174,6 +232,159 @@ class DelayTest {
         delay.process(buffer, buffer.size)
 
         assertTrue(buffer.all { it.isFinite() && abs(it) <= 1.01f }, "delay output stayed bounded")
+    }
+}
+
+class DrivesTest {
+
+    private fun everyDrive(): List<AudioProcessor> =
+        listOf(SmoothDrive(), ScreamerDrive(), RatDrive(), FuzzDrive(), TubeDrive())
+
+    /** Every knob to its loudest end: full drive, full level, tone wide open. */
+    private fun crank(drive: AudioProcessor) {
+        for (parameter in drive.parameters) {
+            parameter.value = when (parameter.name) {
+                "Bass", "Treble" -> 12f
+                "Filter" -> 0f
+                else -> parameter.max
+            }
+        }
+    }
+
+    @Test
+    fun `the overdrive offers the five drives with Smooth first`() {
+        assertEquals(listOf("Smooth", "Screamer", "Rat", "Fuzz", "Tube"), Overdrive.typeNames)
+        val overdrive = Overdrive()
+        assertEquals("Smooth", overdrive.typeName, "the default is the sound every old preset was saved with")
+        assertEquals(listOf("Type", "Drive", "Tone", "Level"), overdrive.parameters.map { it.name })
+        assertEquals(5, overdrive.alternates.size, "every type is built up front for the warm-up")
+    }
+
+    @Test
+    fun `the knob row is the selected type's own`() {
+        val overdrive = Overdrive()
+        overdrive.selectType("Fuzz")
+        assertEquals(listOf("Type", "Fuzz", "Volume"), overdrive.parameters.map { it.name })
+        overdrive.selectType("Tube")
+        assertEquals(listOf("Type", "Gain", "Bass", "Treble", "Level"), overdrive.parameters.map { it.name })
+        overdrive.selectType("Rat")
+        assertEquals(listOf("Type", "Distortion", "Filter", "Volume"), overdrive.parameters.map { it.name })
+    }
+
+    @Test
+    fun `every drive stays inside full scale at its loudest, at both rates`() {
+        for (rate in listOf(44_100f, 96_000f)) {
+            for (drive in everyDrive()) {
+                drive.prepare(rate, 256)
+                crank(drive)
+                drive.reset()
+                // A square wave at full scale, then a sine, so both the clipper's corners and its
+                // filters are driven as hard as they can be.
+                val square = FloatArray(4096) { if ((it / 50) % 2 == 0) 1f else -1f }
+                drive.process(square, square.size)
+                val sine = FloatArray(4096) { sin(it * 0.1).toFloat() }
+                drive.process(sine, sine.size)
+                for (buffer in listOf(square, sine)) {
+                    assertTrue(buffer.all { it.isFinite() }, "${drive.name} produced a non-finite sample at $rate")
+                    val peak = buffer.maxOf { abs(it) }
+                    assertTrue(peak <= 1.01f, "${drive.name} reached $peak at $rate Hz; a drive must not clip the engine")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `every drive is silent on silence, including the biased ones`() {
+        // The fuzz and the tube stage push the clipper off centre. Done naively that leaves an
+        // offset on the output for nothing in, which is a thump when the pedal is switched on.
+        for (drive in everyDrive()) {
+            crank(drive)
+            drive.reset()
+            val buffer = FloatArray(2048)
+            drive.process(buffer, buffer.size)
+            for ((i, v) in buffer.withIndex()) assertEquals(0f, v, 1e-6f, "${drive.name} sample $i")
+        }
+    }
+
+    @Test
+    fun `every drive actually drives`() {
+        // Each adds harmonics: a pure sine comes out with more energy above the fundamental than it
+        // went in with. Measured crudely, as the share of the output that is not the input shape.
+        for (drive in everyDrive()) {
+            drive.reset()
+            val input = FloatArray(4096) { sin(it * 0.05).toFloat() * 0.3f }
+            val output = input.copyOf()
+            drive.process(output, output.size)
+            // Settle past the filters, then compare shape: scale the input to the output's peak and
+            // measure what is left over.
+            val from = 2048
+            val outPeak = (from until output.size).maxOf { abs(output[it]) }
+            val inPeak = (from until input.size).maxOf { abs(input[it]) }
+            assertTrue(outPeak > 0.01f, "${drive.name} produced nothing")
+            var residual = 0.0
+            for (i in from until output.size) {
+                val scaled = input[i] / inPeak * outPeak
+                residual += (output[i] - scaled) * (output[i] - scaled)
+            }
+            assertTrue(residual > 0.1, "${drive.name} left a sine as a sine; it is not driving")
+        }
+    }
+
+    @Test
+    fun `Smooth is the original overdrive, sample for sample`() {
+        // The formula, written out independently: tanh(x·d)/tanh(d), one-pole low-pass, level.
+        val drive = SmoothDrive()
+        drive.drive.value = 8f
+        drive.tone.value = 3000f
+        drive.level.value = 0.7f
+        drive.reset()
+        val input = FloatArray(1024) { sin(it * 0.07).toFloat() * 0.5f }
+        val output = input.copyOf()
+        drive.process(output, output.size)
+
+        val a = 1f - kotlin.math.exp(-2f * Math.PI.toFloat() * 3000f / 44_100f)
+        var lp = 0f
+        for (i in input.indices) {
+            val clipped = kotlin.math.tanh(input[i] * 8f) / kotlin.math.tanh(8f)
+            lp += a * (clipped - lp)
+            assertEquals(lp * 0.7f, output[i], 1e-5f, "sample $i")
+        }
+    }
+
+    @Test
+    fun `the Rat's filter closes as it is turned up`() {
+        fun brightness(filter: Float): Float {
+            val rat = RatDrive()
+            rat.distortion.value = 1f
+            rat.volume.value = 1f
+            rat.filter.value = filter
+            rat.reset()
+            // A high tone well above where the filter can reach: how much survives says how open it is.
+            val buffer = FloatArray(4096) { sin(it * 2.0).toFloat() * 0.3f }
+            rat.process(buffer, buffer.size)
+            return (2048 until buffer.size).maxOf { abs(buffer[it]) }
+        }
+        assertTrue(brightness(0f) > brightness(0.5f), "half way should be darker than open")
+        assertTrue(brightness(0.5f) > brightness(1f), "fully up should be darkest")
+    }
+
+    @Test
+    fun `the fuzz sputters as a note dies away`() {
+        // The whole trick of the voice: a loud signal clips symmetrically and a quiet one is leaned
+        // over by the bias, so the positive and negative peaks stop matching as the level falls.
+        val fuzz = FuzzDrive()
+        fuzz.fuzz.value = 40f
+        fuzz.volume.value = 1f
+        fuzz.reset()
+        fun asymmetry(amplitude: Float): Float {
+            val buffer = FloatArray(8192) { sin(it * 0.05).toFloat() * amplitude }
+            fuzz.process(buffer, buffer.size)
+            val tail = buffer.copyOfRange(6144, 8192)
+            return abs(tail.max() + tail.min())
+        }
+        val loud = asymmetry(0.5f)
+        val quiet = asymmetry(0.02f)
+        assertTrue(quiet > loud + 0.05f, "quiet should be more lopsided than loud: $quiet vs $loud")
     }
 }
 

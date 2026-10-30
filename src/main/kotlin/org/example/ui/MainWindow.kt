@@ -27,30 +27,17 @@ import org.example.audio.DeviceCapabilities
 import org.example.audio.Pairing
 import org.example.audio.SampleRates
 import org.example.audio.StreamRequest
-import org.example.audio.ImpulseLoader
 import org.example.audio.Recorder
 import org.example.util.Config
 import org.example.util.CpuUsage
 import org.example.util.Log
-import org.example.dsp.AudioProcessor
 import org.example.dsp.Parameter
 import org.example.dsp.rhythm.Feels
 import org.example.dsp.rhythm.Pattern
 import org.example.dsp.rhythm.TimeSignature
 import org.example.dsp.rhythm.Transport
-import org.example.dsp.Compressor
-import org.example.dsp.Delay
 import org.example.dsp.EffectChain
-import org.example.dsp.Eq
-import org.example.dsp.FxSlot
-import org.example.dsp.Gain
-import org.example.dsp.Gate
-import org.example.dsp.Ir
 import org.example.dsp.MasterVolume
-import org.example.dsp.Nam
-import org.example.dsp.Overdrive
-import org.example.dsp.Reverb
-import org.example.dsp.nam.NamFile
 import org.example.preset.Preset
 import org.example.preset.PresetStore
 import org.example.preset.Session
@@ -94,38 +81,68 @@ import kotlin.system.exitProcess
 
 class MainWindow : JFrame("Omega-Plugin") {
 
+    /**
+     * The one master, on the sum of the boards. It lives in the top bar and is on no board: a master
+     * that could be dragged ahead of the overdrive would be a different control entirely — which is
+     * what it was when it sat first in the chain, and why it no longer does.
+     */
     private val master = MasterVolume()
-    private val gate = Gate()
-    private val compressor = Compressor()
-    private val eq = Eq()
-    private val gain = Gain()
-    private val overdrive = Overdrive()
-    private val nam = Nam()
-    private val ir = Ir()
-    private val fx1 = FxSlot()
-    private val delay = Delay()
-    private val reverb = Reverb()
 
-    // Master is deliberately outside the re-orderable set: it lives in the top bar, and a master
-    // level that could be dragged behind the overdrive would be a different control entirely.
-    //
-    // The default order is the conventional one. Gate first, because gating after a distortion means
-    // gating the noise the distortion just amplified. The cabinet sits after the drive and before
-    // the time effects, so delay and reverb are a room around the speaker rather than through it.
-    //
-    // The EQ sits before the drive, because an EQ in front of a clipper shapes what the clipper is
-    // given and an EQ behind it only tidies up afterwards — and on a clean sound, which is where
-    // this one earns its place, the position makes no difference at all.
-    //
-    // FX 1 lands after the cabinet and before the time effects, which is the post slot on any
-    // modelling pedal and the useful default for what tends to go in it. It is only a default: like
-    // every other pedal it can be dragged, and unlike them there can be more than one of it.
-    private val pedals = listOf(gate, compressor, eq, gain, overdrive, nam, ir, fx1, delay, reverb)
+    /**
+     * What a board needs from this window. One object serves both boards, because nothing a board
+     * asks for differs between them — the status line, the dirty flag and the device bar are shared.
+     */
+    private val boardHost = object : Board.Host {
+        override fun status(text: String, colour: java.awt.Color) = setStatus(text, colour)
+        override fun markEdited() = this@MainWindow.markEdited()
+        override fun requireStoppedForBoardChange(): Boolean =
+            this@MainWindow.requireStoppedForBoardChange()
+        override val displayRate: Int get() = this@MainWindow.displayRate
+        override fun ampChanged() = announceSplitLoad()
+    }
 
-    private val chain = EffectChain(listOf(master) + pedals)
-    private val engine = AudioEngine(chain)
+    /**
+     * The board, and the second one split mode adds below it.
+     *
+     * Both exist from the start, whether or not split is on, and both are always in the engine. That
+     * is the threading contract's doing rather than generosity: split is switched while the stream
+     * runs, and a board constructed, prepared or warmed at that moment would be class loading
+     * against the deadline. Idle, the second board costs nothing — the engine does not run it.
+     */
+    private val board = Board(this, boardHost)
+    private val board2 = Board(this, boardHost)
 
-    private val board = ChainBoard(pedals)
+    private val engine = AudioEngine(
+        board.chain,
+        second = board2.chain,
+        post = EffectChain(listOf(master)),
+    )
+
+    private val stack = BoardStack(board.view)
+
+    /** Whether the second board is on. `engine.split` is the audio side of the same switch. */
+    private var split = false
+
+    /**
+     * The fork beside the first board's eye. Struck while there is one board, like the eye is struck
+     * while pedals are hidden: the line says what is true now, and pressing it removes it.
+     */
+    private val splitButton = EffectPanel.IconButton(EffectPanel.IconButton.Kind.SPLIT_OFF) {
+        setSplit(!split)
+    }.apply { toolTipText = "Split into two boards" }
+
+    /** Which board is which, shown only once there are two. */
+    private val boardLabel1 = label("BOARD 1").apply { isVisible = false }
+    private val boardLabel2 = label("BOARD 2")
+
+    /**
+     * Each board's LEVEL: a mini master at the end of that board, in its header, only in split mode.
+     * The same compact knob and readout as MASTER, click to mute, so nothing new has to be learned.
+     */
+    private val levelKnob1 = Knob(board.level.volume, compact = true)
+    private val levelKnob2 = Knob(board2.level.volume, compact = true)
+    private val levelValue1 = fixedValueLabel()
+    private val levelValue2 = fixedValueLabel()
 
     private val titleBar = TitleBar(this, "Omega-Plugin") { shutdown() }
 
@@ -149,33 +166,6 @@ class MainWindow : JFrame("Omega-Plugin") {
      */
     private var pendingFailures: List<String> = emptyList()
 
-    /** The IR pedal's load button, kept so its label can show the cabinet in use. */
-    private var irButton: EffectPanel.HeaderButton? = null
-
-    /** The NAM pedal's load button, likewise. */
-    private var namButton: EffectPanel.HeaderButton? = null
-
-    /** The NAM pedal's overflow menu. Dead until a capture is loaded — it has nothing to say before. */
-    private var namMenu: EffectPanel.MenuButton? = null
-
-    /** The ✕ on each file-loading module. Present only while there is a file to discard. */
-    private var irClear: EffectPanel.ClearButton? = null
-    private var namClear: EffectPanel.ClearButton? = null
-
-    /**
-     * The `+` and `✕` on each FX slot, kept so the ✕ can be hidden on whichever slot is currently
-     * first — FX 1 is permanent, and which slot *is* FX 1 changes as the board is rearranged.
-     */
-    private val slotButtons = HashMap<FxSlot, Pair<EffectPanel.IconButton, EffectPanel.ClearButton>>()
-
-    /**
-     * Where each module's loaded file came from, keyed by effect name, so a preset can record it.
-     *
-     * Alongside it, where a preset's file *should* have been when it was not there — kept so the
-     * chooser can open where the file used to live, which is usually one folder from where it went.
-     */
-    private val loadedFiles = HashMap<String, String>()
-    private val missingFiles = HashMap<String, String>()
 
     /**
      * Every backend, including the ones that will not run here, greyed with the reason appended.
@@ -455,7 +445,7 @@ class MainWindow : JFrame("Omega-Plugin") {
     private val rhythmLevelParameter = Parameter("Level", 0f, 1f, 0.5f, unit = "")
 
     private val rhythmLevel = Knob(rhythmLevelParameter, compact = true).apply {
-        toolTipText = "Level of the click and the kit. Independent of MASTER, which is an input trim."
+        toolTipText = "Level of the click and the kit. Independent of MASTER, which covers the guitar only."
         onChange = {
             rhythm.level = rhythmLevelParameter.value
             touchSession()
@@ -525,11 +515,11 @@ class MainWindow : JFrame("Omega-Plugin") {
             border = BorderFactory.createEmptyBorder(14, 16, 14, 16)
         }
         root.add(buildTopBars(), BorderLayout.NORTH)
-        // Scrolled, because a narrow window needs more rows than it has height for. ChainBoard is
+        // Scrolled, because a narrow window needs more rows than it has height for. The stack is
         // Scrollable and fills the viewport whenever it fits, so the scrollbar only appears when the
-        // chain genuinely does not.
+        // boards genuinely do not.
         root.add(
-            JScrollPane(board).apply {
+            JScrollPane(stack).apply {
                 border = BorderFactory.createEmptyBorder()
                 isOpaque = false
                 viewport.isOpaque = false
@@ -663,19 +653,18 @@ class MainWindow : JFrame("Omega-Plugin") {
             }
         }
 
-        // Master stays pinned at the head of the chain; only the pedals after it move.
-        board.onReorder = { order ->
-            chain.reorder(listOf(master) + order)
-            // Slots are numbered by position, so dragging one past another renames both.
-            renumberSlots()
-            markEdited()
+        // The eye is one preference, remembered once. Pressing it on either board sets both, because
+        // "hide what is off" is a statement about how this person reads a board, not about one of
+        // them. Restored before the listener is attached, so putting the saved value back does not
+        // count as a change and write it out again.
+        for (b in listOf(board, board2)) {
+            b.view.hideDisabled = config.hideDisabledModules
+            b.view.onHideDisabledChanged = { on ->
+                config.hideDisabledModules = on
+                board.view.hideDisabled = on
+                board2.view.hideDisabled = on
+            }
         }
-        board.onEdited = { markEdited() }
-
-        // Restored before the listener is attached, so putting the saved value back does not count
-        // as a change and write it out again.
-        board.hideDisabled = config.hideDisabledModules
-        board.onHideDisabledChanged = { config.hideDisabledModules = it }
 
         masterKnob.onChange = {
             updateMaster()
@@ -688,28 +677,22 @@ class MainWindow : JFrame("Omega-Plugin") {
         }
         updateMaster()
 
+        // The split fork sits beside the first board's eye, and the second board's ✕ is the other
+        // way out of split mode. Each board's LEVEL lives at the right end of its own header, where
+        // it is unambiguously that board's, and appears only in split mode, when it means something.
+        board.view.headerLeft.add(splitButton)
+        board.view.headerLeft.add(boardLabel1)
+        board2.view.headerLeft.add(boardLabel2)
+        board.view.headerRight.add(levelGroup(board, levelKnob1, levelValue1))
+        board2.view.headerRight.add(levelGroup(board2, levelKnob2, levelValue2))
+        board2.view.headerRight.add(
+            EffectPanel.ClearButton { setSplit(false) }.apply { toolTipText = "Back to one board" }
+        )
+        updateBoardLevels()
+
         titleBar.onMenuOpening = { menu -> buildPresetMenu(menu) }
         reloadPresets(announce = true)
 
-        // The only module that needs more than knobs. The button lives on its own pedal rather than
-        // in the menu, because that is where you are looking when you want to change cabinet.
-        irButton = board.panelFor(ir)?.addHeaderButton("LOAD", "Load an impulse response") {
-            chooseImpulse()
-        }
-        namButton = board.panelFor(nam)?.addHeaderButton("LOAD", "Load a Neural Amp Modeler capture") {
-            chooseNamModel()
-        }
-        namMenu = board.panelFor(nam)?.addHeaderMenu("More NAM settings") { popup ->
-            buildNamMenu(popup)
-        }
-        namMenu?.isEnabled = false
-
-        // Added last so they land left of LOAD — see EffectPanel.addHeaderClear.
-        irClear = board.panelFor(ir)?.addHeaderClear("Remove this cabinet") { clearIr() }
-        namClear = board.panelFor(nam)?.addHeaderClear("Remove this amp") { clearNam() }
-
-        board.panelFor(fx1)?.let { wireSlot(it, fx1) }
-        renumberSlots()
         recordButton.isEnabled = false
 
         // Alt+F4 and a WM_CLOSE from outside still arrive here even without a native close button.
@@ -1138,150 +1121,6 @@ class MainWindow : JFrame("Omega-Plugin") {
         )
     }
 
-    // --------------------------------------------------------------- presets
-
-    /** Everything that is not the audio setup, in the order the chain runs it. */
-    private fun allEffects(): List<AudioProcessor> = listOf(master) + board.order
-
-    // ------------------------------------------------------------- FX slots
-
-    /** The slots on the board, in signal order — which is also their numbering order. */
-    private fun slots(): List<FxSlot> = board.order.filterIsInstance<FxSlot>()
-
-    /**
-     * Gives a slot's pedal its `+` and `✕`.
-     *
-     * Added in this order because both insert at the far left of the header, so the *last* one added
-     * ends up leftmost: `✕`, then `+`, then the type dropdown the panel built for itself. Discard on
-     * the outside, where it has to be aimed at rather than passed over on the way to something else.
-     */
-    private fun wireSlot(panel: EffectPanel, slot: FxSlot) {
-        val add = panel.addHeaderIcon(
-            EffectPanel.IconButton.Kind.ADD,
-            "Add another FX module after this one",
-        ) { addSlotAfter(slot) }
-        val remove = panel.addHeaderClear("Remove this FX module") { deleteSlot(slot) }
-        slotButtons[slot] = add to remove
-    }
-
-    /**
-     * Renumbers every slot from its position, and hides the first one's `✕`.
-     *
-     * Run after anything that can change the board's membership or order. The numbers are labels
-     * computed from position, never identities — see [FxSlot.label] — so this is allowed to
-     * renumber freely, and a preset written afterwards agrees with the board because it is captured
-     * from the board rather than from anything remembered across the change.
-     */
-    private fun renumberSlots() {
-        val slots = slots()
-        slots.forEachIndexed { index, slot ->
-            slot.label = FxSlot.labelFor(index + 1)
-            // The first slot is permanent. Not disabled — absent: a greyed ✕ that can never be
-            // pressed is a control whose whole job is to explain that it does nothing.
-            slotButtons[slot]?.second?.isVisible = index > 0
-        }
-        board.refreshTitles()
-    }
-
-    /**
-     * Adds a slot immediately after [after], with the stream stopped.
-     *
-     * Refused rather than queued while playing, and it is the same rule the drag handle follows:
-     * membership changes mean publishing an effect that has not been prepared or warmed, and the
-     * warm-up is the thing standing between the first second of a new module and an xrun.
-     */
-    private fun addSlotAfter(after: FxSlot) {
-        if (!requireStoppedForBoardChange()) return
-        val slot = FxSlot()
-        wireSlot(board.addPanel(slot, after), slot)
-        renumberSlots()
-        chain.replaceAll(allEffects())
-        markEdited()
-        setStatus("Added ${slot.label}.", Theme.TEXT_DIM)
-    }
-
-    /**
-     * Removes a slot, asking first if there is anything in it to lose.
-     *
-     * A slot added a moment ago and never touched goes without a dialog; one that has been dialled
-     * in asks. The confirmation is about the work, not about the click.
-     */
-    private fun deleteSlot(slot: FxSlot) {
-        if (!requireStoppedForBoardChange()) return
-        if (!slot.isUntouched()) {
-            val confirmed = ConfirmDialog.ask(
-                owner = this,
-                title = "Remove ${slot.label}",
-                message = "Remove ${slot.label}?",
-                detail = "It is set to ${slot.typeName}. Its settings will be lost.",
-                confirmText = "Remove",
-                confirmColour = Theme.BAD,
-            )
-            if (!confirmed) return
-        }
-        val name = slot.label
-        slotButtons.remove(slot)
-        board.removePanel(slot)
-        renumberSlots()
-        chain.replaceAll(allEffects())
-        markEdited()
-        setStatus("Removed $name.", Theme.TEXT_DIM)
-    }
-
-    private fun requireStoppedForBoardChange(): Boolean {
-        if (!engine.isRunning) return true
-        setStatus("Stop the stream to add or remove modules.", Theme.BAD)
-        return false
-    }
-
-    /**
-     * Makes the board carry exactly the slots a sound describes, then fills them in.
-     *
-     * This is the step [Preset.applyTo] cannot do. That method matches modules by name and applies
-     * what it finds; it has no way to bring a module into existence, and a preset with three slots
-     * loaded onto a board with one would otherwise apply the first and silently drop the other two.
-     *
-     * Never goes below one slot, because FX 1 is permanent — including for a preset saved before
-     * slots existed, which describes none and correctly gets an empty, bypassed FX 1.
-     */
-    private fun syncSlots(fx: List<Preset.Fx>) {
-        val slots = slots().toMutableList()
-        val wanted = maxOf(fx.size, 1)
-
-        while (slots.size > wanted) {
-            val last = slots.removeAt(slots.lastIndex)
-            slotButtons.remove(last)
-            board.removePanel(last)
-        }
-        while (slots.size < wanted) {
-            val slot = FxSlot()
-            wireSlot(board.addPanel(slot, slots.lastOrNull()), slot)
-            slots += slot
-        }
-
-        slots.forEachIndexed { index, slot ->
-            val entry = fx.getOrNull(index)
-            // By name, and an unknown name leaves the default — see FxSlot.selectType for why the
-            // index in the values map is not trusted for this.
-            slot.selectType(entry?.type ?: FxSlot.typeNames.first())
-            slot.applyValues(entry?.values ?: emptyMap())
-        }
-        renumberSlots()
-    }
-
-    /**
-     * Puts back the type each slot was on, after [Preset.applyTo] has run.
-     *
-     * Belt and braces, and worth the two lines. `applyTo` restores every parameter including the
-     * slot's own Type, which is stored as a positional index; if the list of types is ever appended
-     * to in a way that moves one, that index is stale while the name in the preset's `fx` list is
-     * not. Applying the name last means the name wins.
-     */
-    private fun reselectSlotTypes(fx: List<Preset.Fx>) {
-        slots().forEachIndexed { index, slot ->
-            fx.getOrNull(index)?.let { slot.selectType(it.type) }
-        }
-    }
 
     /**
      * Records that the sound has moved away from whatever was last loaded or saved.
@@ -1509,196 +1348,6 @@ class MainWindow : JFrame("Omega-Plugin") {
         if (imported > 0) setStatus("Imported $imported preset(s).", Theme.GOOD)
     }
 
-    /**
-     * Picks an impulse response and hands it to the IR module.
-     *
-     * Decoding happens here, on the event thread, not in the module: it is file I/O and Java Sound,
-     * neither of which may go anywhere near the audio thread. `Ir.loadImpulse` publishes the result
-     * atomically, so this is safe while the stream is running.
-     */
-    private fun chooseImpulse() {
-        val chooser = FileDialog(this, "Load impulse response", FileDialog.LOAD).apply {
-            file = "*.wav"
-            openWhereFileWas(ir.name)
-        }
-        chooser.isVisible = true
-        val directory = chooser.directory ?: return
-        val name = chooser.file ?: return
-
-        try {
-            val chosen = java.io.File(directory, name)
-            val impulse = ImpulseLoader.load(chosen)
-            ir.loadImpulse(impulse.samples, impulse.sampleRate, impulse.name)
-            loadedFiles[ir.name] = chosen.absolutePath
-            missingFiles.remove(ir.name)
-            irButton?.label = impulse.name.substringBeforeLast('.')
-            irButton?.alert = false
-            irButton?.toolTipText = chosen.absolutePath
-            irClear?.isVisible = true
-            markEdited()
-            val milliseconds = impulse.samples.size * 1000f / impulse.sampleRate
-            setStatus(
-                String.format(
-                    "Loaded cabinet \"%s\" — %.0f ms at %.0f kHz, using the first %.0f ms.",
-                    impulse.name,
-                    milliseconds,
-                    impulse.sampleRate / 1000f,
-                    minOf(milliseconds, Ir.MAX_TAPS * 1000f / impulse.sampleRate),
-                ),
-                Theme.GOOD,
-            )
-        } catch (e: Exception) {
-            Log.error("ir", "Could not load the impulse response \"$name\".", e)
-            setStatus("\"$name\" ${e.message ?: e.javaClass.simpleName}", Theme.BAD)
-        }
-    }
-
-    /**
-     * Picks a Neural Amp Modeler capture and hands it to the NAM module.
-     *
-     * Parsing is deliberately done here and not lazily in the audio path: a standard capture is
-     * megabytes of JSON and thousands of weights, and none of that may happen anywhere near the
-     * callback. The cost of the model is reported afterwards, because whether it will run at the
-     * current buffer size depends entirely on which model was chosen.
-     */
-    private fun chooseNamModel() {
-        val chooser = FileDialog(this, "Load NAM capture", FileDialog.LOAD).apply {
-            file = "*.nam"
-            openWhereFileWas(nam.name)
-        }
-        chooser.isVisible = true
-        val directory = chooser.directory ?: return
-        val name = chooser.file ?: return
-
-        try {
-            val chosen = java.io.File(directory, name)
-            val text = java.nio.file.Files.readString(chosen.toPath())
-            val loaded = NamFile.parse(text, name)
-            nam.load(loaded)
-            loadedFiles[nam.name] = chosen.absolutePath
-            missingFiles.remove(nam.name)
-            namButton?.label = name.substringBeforeLast('.')
-            namButton?.alert = false
-            namButton?.toolTipText = chosen.absolutePath
-            namClear?.isVisible = true
-            markEdited()
-
-            namMenu?.isEnabled = true
-
-            val perSecond = loaded.network.operationsPerSample * displayRate / 1_000_000.0
-            val rateWarning = when {
-                !nam.rateMismatch -> ""
-                nam.matchRates -> String.format(
-                    "  Captured at %s and matched to it, costing %.2f ms.",
-                    SampleRates.format(loaded.sampleRate.toInt()),
-                    nam.rateLatencyFrames * 1000f / displayRate,
-                )
-                else -> "  Captured at ${SampleRates.format(loaded.sampleRate.toInt())}, running at " +
-                    "${SampleRates.format(displayRate)} — about 8 % slow, so slightly darker."
-            }
-            // Both of these are things the player would otherwise have to discover by ear: that
-            // there is a cheaper version of this amp in the same file, and that it was quiet enough
-            // to need a lot of making up.
-            val sizes = if (loaded.submodels.size > 1) {
-                "  Carries ${loaded.submodels.size} sizes — SIZE trades accuracy for CPU."
-            } else {
-                ""
-            }
-            val normalisation = if (nam.normalization != 1f) {
-                String.format(
-                    "  Levelled by %+.1f dB.",
-                    20.0 * kotlin.math.log10(nam.normalization.toDouble()),
-                )
-            } else {
-                ""
-            }
-            setStatus(
-                String.format(
-                    "Loaded amp \"%s\" — %,d operations per sample, about %.0f million per second.%s%s%s",
-                    name,
-                    loaded.network.operationsPerSample,
-                    perSecond,
-                    sizes,
-                    normalisation,
-                    rateWarning,
-                ),
-                // A matched rate is no longer a warning — it is the normal case, handled.
-                if (nam.rateMismatch && !nam.matchRates) Theme.BAD else Theme.GOOD,
-            )
-        } catch (e: Exception) {
-            Log.error("nam", "Could not load the capture \"$name\".", e)
-            setStatus("\"$name\" ${e.message ?: e.javaClass.simpleName}", Theme.BAD)
-        }
-    }
-
-    /**
-     * The NAM pedal's overflow menu, rebuilt each time it opens.
-     *
-     * Rebuilt rather than kept, because everything in it depends on state that changes underneath —
-     * which capture is loaded, and what rate the device settled on. A menu built once would go stale
-     * the first time either changed.
-     */
-    private fun buildNamMenu(popup: JPopupMenu) {
-        val content = DarkMenu.content()
-        if (!nam.rateMismatch) {
-            content.add(
-                DarkMenu.disabledRow(
-                    "Match capture rate — not needed at ${SampleRates.format(displayRate)}"
-                )
-            )
-            popup.add(content)
-            return
-        }
-
-        content.add(
-            // Deliberately not markEdited(): this belongs to the device pairing, not to the patch.
-            // A preset cannot store it — it does not store which capture was loaded either — so
-            // flagging the preset dirty would offer to save something that cannot be saved.
-            DarkMenu.switchRow("Match capture rate", nam.matchRates) { on ->
-                nam.setMatchRates(on)
-                announceRateMatching()
-            }
-        )
-        content.add(
-            DarkMenu.note(
-                "Capture is ${SampleRates.format(nam.modelRate.toInt())}, " +
-                    "device is ${SampleRates.format(displayRate)}."
-            )
-        )
-        // The cost, stated where the choice is made. It is the entire reason this is a switch and
-        // not simply always on.
-        val added = nam.rateLatencyFrames
-        content.add(
-            DarkMenu.note(
-                String.format(
-                    "Costs %d frames — %.2f ms. Off, it plays about 8 %% slow.",
-                    added,
-                    added * 1000f / displayRate,
-                )
-            )
-        )
-        popup.add(content)
-    }
-
-    private fun announceRateMatching() {
-        val added = nam.rateLatencyFrames
-        if (nam.matchRates) {
-            setStatus(
-                String.format(
-                    "Matching the capture's %s — %+.2f ms of latency.",
-                    SampleRates.format(nam.modelRate.toInt()),
-                    added * 1000f / displayRate,
-                ),
-                Theme.GOOD,
-            )
-        } else {
-            setStatus(
-                "Running the capture at ${SampleRates.format(displayRate)} — about 8 % slow, " +
-                    "so it will sound slightly darker.",
-                Theme.TEXT_DIM,
-            )
-        }
-    }
 
     /** Shows the full detail of any preset files that failed to load. */
     private fun showLoadFailures() {
@@ -1751,19 +1400,45 @@ class MainWindow : JFrame("Omega-Plugin") {
 
     private fun saveOverExisting() {
         val current = loaded ?: return
-        store(Preset.capture(current.name, board.order, allEffects(), loadedFileRefs()))
+        store(captureSound(current.name))
     }
 
-    /** What each module currently has loaded, in the shape a preset stores. */
-    private fun loadedFileRefs(): Map<String, Preset.FileRef> {
-        val files = LinkedHashMap<String, Preset.FileRef>()
-        nam.modelName?.let { name ->
-            loadedFiles[nam.name]?.let { files[nam.name] = Preset.FileRef(name, it) }
+    /**
+     * The sound as it stands: the first board with the master beside it, and the second board nested
+     * inside when split is on.
+     *
+     * With split off the second board is not written. It keeps its settings for as long as the
+     * program runs, so switching split off and on again returns what was there — but a preset or a
+     * session saved with one board describes one board, and reads exactly as it did before split
+     * existed.
+     */
+    private fun captureSound(name: String): Preset = Preset.capture(
+        name,
+        board.order,
+        listOf(master) + board.allEffects(),
+        board.loadedFileRefs(),
+        split = if (split) board2.captureSecond() else null,
+    )
+
+    /**
+     * Puts a sound onto the boards, the master and the split switch, with the stream stopped.
+     * Returns a sentence for each file that could not be found.
+     */
+    private fun applySound(sound: Preset): List<String> {
+        val missing = board.apply(sound).toMutableList()
+        // The master is in the outer preset's maps beside the first board's pedals, and is applied on
+        // its own because it is on no board. An unmentioned master comes back on — see Preset.applyTo.
+        sound.applyTo(listOf(master))
+        updateMaster()
+        val second = sound.split
+        if (second != null) {
+            missing += board2.apply(second)
+            setSplit(true, fromUser = false)
+        } else {
+            setSplit(false, fromUser = false)
         }
-        ir.impulseName?.let { name ->
-            loadedFiles[ir.name]?.let { files[ir.name] = Preset.FileRef(name, it) }
-        }
-        return files
+        updateBoardLevels()
+        return missing
     }
 
     private fun saveAsNew() {
@@ -1781,7 +1456,7 @@ class MainWindow : JFrame("Omega-Plugin") {
             )
             if (!replace) return
         }
-        store(Preset.capture(name, board.order, allEffects(), loadedFileRefs()))
+        store(captureSound(name))
     }
 
     /**
@@ -1837,24 +1512,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         val wasRunning = engine.isRunning
         if (wasRunning) stopEngine()
 
-        // Before applyTo, which can match modules by name but cannot create them.
-        syncSlots(preset.fx)
-
-        val order = preset.applyTo(allEffects())
-        val pedalOrder = order.filter { it !== master }
-        board.setOrder(pedalOrder)
-        reselectSlotTypes(preset.fx)
-        renumberSlots()
-        board.syncFromEffects()
-        // replaceAll rather than reorder: the board's membership may have just changed, and reorder
-        // is deliberately strict about being handed a permutation.
-        chain.replaceAll(listOf(master) + pedalOrder)
-        updateMaster()
-
-        // While the stream is down, so a capture is never loaded into a running callback — and so
-        // its warm-up costs nothing that anyone hears. Both are attempted whatever the other does:
-        // a missing cabinet must not cost you the amp as well.
-        val missing = listOfNotNull(restoreNam(preset), restoreIr(preset))
+        val missing = applySound(preset)
 
         loaded = preset
         edited = false
@@ -1875,176 +1533,6 @@ class MainWindow : JFrame("Omega-Plugin") {
         }
     }
 
-    /**
-     * Puts back the file a module had loaded, and reports what happened.
-     *
-     * Returns null on success or when the preset named no file, or a message explaining why the
-     * file is not there.
-     *
-     * **A missing file costs the file and nothing else.** Every knob the preset restored stays
-     * exactly as it was — level, mix, and the rest are all still right — so pointing at the moved
-     * file is the whole of what is left to do. What the module *had* loaded is dropped rather than
-     * left in place: a preset that names "GOAT", shows GOAT's settings and plays something else is
-     * worse than one that plainly has no amp.
-     *
-     * Shared by NAM and IR so the two cannot drift apart; only the loader, the labels and the
-     * wording differ.
-     */
-    private fun restoreFile(
-        preset: Preset,
-        effect: String,
-        button: EffectPanel.HeaderButton?,
-        emptyTooltip: String,
-        clear: () -> Unit,
-        load: (java.io.File) -> Unit,
-    ): String? {
-        missingFiles.remove(effect)
-        val wanted = preset.files[effect]
-
-        if (wanted == null) {
-            // Saved without one. Anything still loaded belongs to the sound before this one.
-            clear()
-            loadedFiles.remove(effect)
-            button?.label = "LOAD"
-            button?.alert = false
-            button?.toolTipText = emptyTooltip
-            return null
-        }
-
-        val file = java.io.File(wanted.path)
-        val problem = try {
-            load(file)
-            null
-        } catch (e: Exception) {
-            // A capture or cabinet that has moved is the most common thing to go wrong between one
-            // launch and the next, and the UI's version of it is a small alert on a button.
-            Log.warn("preset", "\"${wanted.path}\" for $effect could not be reloaded: ${e.message}")
-            e.message ?: e.javaClass.simpleName
-        }
-
-        if (problem == null) {
-            loadedFiles[effect] = wanted.path
-            button?.label = file.name.substringBeforeLast('.')
-            button?.alert = false
-            button?.toolTipText = wanted.path
-            return null
-        }
-
-        clear()
-        loadedFiles.remove(effect)
-        missingFiles[effect] = wanted.path
-        button?.label = wanted.name.substringBeforeLast('.')
-        button?.alert = true
-        button?.toolTipText = "${wanted.name} is not at ${wanted.path} — click to find it"
-        // A restored session has no preset name to blame — the sound came from nowhere in
-        // particular — so the sentence names the file instead of an empty pair of quotes.
-        val whose = if (preset.name.isBlank()) "" else "Preset \"${preset.name}\" wants "
-        val what = if (whose.isEmpty()) "\"${wanted.name}\" for $effect is" else "\"${wanted.name}\" for $effect, which is"
-        return "$whose$what not at ${wanted.path} — its settings were kept, so click the red " +
-            "button on $effect to point at the file again."
-    }
-
-    /**
-     * Points a chooser at where this module's file was last seen.
-     *
-     * For a preset whose file has moved, that is usually one folder from where it went — which
-     * beats opening wherever the last dialog happened to leave off.
-     */
-    private fun FileDialog.openWhereFileWas(effect: String) {
-        val previous = loadedFiles[effect] ?: missingFiles[effect] ?: return
-        java.io.File(previous).parentFile
-            ?.takeIf { it.isDirectory }
-            ?.let { directory = it.absolutePath }
-    }
-
-    private fun restoreNam(preset: Preset): String? {
-        val problem = restoreFile(
-            preset,
-            nam.name,
-            namButton,
-            "Load a Neural Amp Modeler capture",
-            clear = { nam.clear() },
-            load = { file -> nam.load(NamFile.parse(Files.readString(file.toPath()), file.name)) },
-        )
-        namMenu?.isEnabled = nam.modelName != null
-        syncClearButton(nam.name, namClear, nam.modelName != null)
-        return problem
-    }
-
-    /**
-     * Throws away the file a module had loaded, leaving the module itself alone.
-     *
-     * Not confirmed, deliberately. The undo is the LOAD button sitting immediately beside it, and a
-     * dialog in front of a one-click action that is one click to reverse is friction pretending to
-     * be safety. The knobs are untouched, so nothing that was dialled in is lost either.
-     *
-     * Shared by NAM and IR so the two cannot drift; only the module, the button and the noun differ.
-     */
-    private fun clearLoadedFile(
-        effect: String,
-        button: EffectPanel.HeaderButton?,
-        clearButton: EffectPanel.ClearButton?,
-        emptyTooltip: String,
-        noun: String,
-        clear: () -> Unit,
-    ) {
-        clear()
-        loadedFiles.remove(effect)
-        missingFiles.remove(effect)
-        button?.label = "LOAD"
-        button?.alert = false
-        button?.toolTipText = emptyTooltip
-        clearButton?.isVisible = false
-        markEdited()
-        setStatus("Removed the $noun from $effect. Its settings were kept.", Theme.TEXT_DIM)
-    }
-
-    private fun clearNam() {
-        clearLoadedFile(
-            nam.name,
-            namButton,
-            namClear,
-            "Load a Neural Amp Modeler capture",
-            "amp",
-        ) { nam.clear() }
-        // Everything in it describes a capture, and there is no longer one.
-        namMenu?.isEnabled = false
-    }
-
-    private fun clearIr() = clearLoadedFile(
-        ir.name,
-        irButton,
-        irClear,
-        "Load an impulse response",
-        "cabinet",
-    ) { ir.clearImpulse() }
-
-    /**
-     * Shows the ✕ exactly when there is something for it to discard.
-     *
-     * A *missing* file counts. The module has no amp in it, but it still holds a reference that is
-     * colouring the button red and putting a sentence on the status line — and "I do not have that
-     * file any more, stop asking" is a thing the player has to be able to say.
-     */
-    private fun syncClearButton(effect: String, button: EffectPanel.ClearButton?, loaded: Boolean) {
-        button?.isVisible = loaded || effect in missingFiles
-    }
-
-    private fun restoreIr(preset: Preset): String? {
-        val problem = restoreFile(
-            preset,
-            ir.name,
-            irButton,
-            "Load an impulse response",
-            clear = { ir.clearImpulse() },
-            load = { file ->
-                val impulse = ImpulseLoader.load(file)
-                ir.loadImpulse(impulse.samples, impulse.sampleRate, impulse.name)
-            },
-        )
-        syncClearButton(ir.name, irClear, ir.impulseName != null)
-        return problem
-    }
 
     /**
      * Asks before a load throws away edits.
@@ -2128,6 +1616,133 @@ class MainWindow : JFrame("Omega-Plugin") {
         masterKnob.muted = muted
         masterValue.text = if (muted) "MUTED" else master.volume.formatted()
         masterValue.foreground = if (muted) Theme.BAD else Theme.TEXT
+    }
+
+    // ------------------------------------------------------------------ split
+
+    /**
+     * Switches the second board in or out.
+     *
+     * Allowed while the stream runs, unlike every other change to what a board holds, because
+     * nothing is being added to a chain: the second board is always prepared and warmed, and the
+     * engine fades its share of the output in and out rather than switching it. What changes on the
+     * audio side is three volatile stores — each board's LEVEL waking up, and the engine's flag.
+     *
+     * [fromUser] separates the press from a preset or a session putting the switch back. Only the
+     * press dirties the sound and speaks.
+     */
+    private fun setSplit(on: Boolean, fromUser: Boolean = true) {
+        if (split == on) return
+        split = on
+        if (on) {
+            // The second board has been idle with whatever its delay and reverb last held. That is
+            // not part of the sound being switched to, and this is the one moment it can be cleared
+            // without the audio thread being inside it.
+            if (!engine.secondRunning) board2.chain.reset()
+            board.level.active = true
+            board2.level.active = true
+            engine.split = true
+        } else {
+            engine.split = false
+            board.level.active = false
+            board2.level.active = false
+        }
+        splitButton.kind =
+            if (on) EffectPanel.IconButton.Kind.SPLIT else EffectPanel.IconButton.Kind.SPLIT_OFF
+        splitButton.toolTipText = if (on) "Back to one board" else "Split into two boards"
+        boardLabel1.isVisible = on
+        board.view.headerRight.isVisible = on
+        board2.view.headerRight.isVisible = on
+        if (on) stack.showSecond(board2.view) else stack.hideSecond()
+        board.view.revalidate()
+        updateBoardLevels()
+
+        if (!fromUser) return
+        markEdited()
+        val warning = splitLoadWarning()
+        when {
+            warning != null -> setStatus(warning, Theme.BAD)
+            on -> setStatus(
+                "Split on — two boards, both heard. LEVEL on each sets its share; MASTER covers both.",
+                Theme.GOOD,
+            )
+            else -> setStatus("Split off. The second board keeps its settings until you quit.", Theme.TEXT_DIM)
+        }
+    }
+
+    /**
+     * Said when both boards carry an amp capture at a buffer that may not hold them.
+     *
+     * Measured rather than guessed: one capture at 64 frames uses about 98 % of the callback period
+     * — see CLAUDE.md — so two cannot fit at 64 and are marginal at 128. 256 is where there is room.
+     */
+    private fun splitLoadWarning(): String? {
+        if (!split || board.nam.modelName == null || board2.nam.modelName == null) return null
+        val frames = engine.format?.bufferFrames ?: (bufferCombo.selectedItem as? Int) ?: return null
+        if (frames >= SPLIT_NAM_FRAMES) return null
+        return "Both boards carry an amp capture. At $frames frames that may not keep up — " +
+            "set BUFFER to $SPLIT_NAM_FRAMES or more."
+    }
+
+    /** After a capture arrives or leaves on either board. */
+    private fun announceSplitLoad() {
+        splitLoadWarning()?.let { setStatus(it, Theme.BAD) }
+    }
+
+    private fun requireStoppedForBoardChange(): Boolean {
+        if (!engine.isRunning) return true
+        setStatus("Stop the stream to add or remove modules.", Theme.BAD)
+        return false
+    }
+
+    private fun updateBoardLevels() {
+        updateBoardLevel(board, levelKnob1, levelValue1)
+        updateBoardLevel(board2, levelKnob2, levelValue2)
+    }
+
+    /** Keeps a board's LEVEL readout and knob in step with its mute, as [updateMaster] does. */
+    private fun updateBoardLevel(b: Board, knob: Knob, value: JLabel) {
+        val muted = !b.level.enabled
+        knob.muted = muted
+        value.text = if (muted) "MUTED" else b.level.volume.formatted()
+        value.foreground = if (muted) Theme.BAD else Theme.TEXT
+    }
+
+    /** LEVEL, its knob and its readout, as one unit for a board's header. */
+    private fun levelGroup(b: Board, knob: Knob, value: JLabel): JPanel {
+        knob.toolTipText =
+            "This board's level in the mix — drag to adjust, shift for fine, click to mute and unmute"
+        knob.onChange = {
+            updateBoardLevel(b, knob, value)
+            markEdited()
+        }
+        knob.onClick = {
+            b.level.enabled = !b.level.enabled
+            updateBoardLevel(b, knob, value)
+            markEdited()
+        }
+        return JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            isOpaque = false
+            add(label("LEVEL"))
+            add(knob)
+            add(value)
+        }
+    }
+
+    /**
+     * A readout that reserves the widest string it will ever hold, measured rather than guessed, with
+     * minimum and maximum pinned as well as preferred. Preferred alone is not enough: JLabel derives
+     * its minimum from its current text, so the layout still grows the column when "MUTED" replaces
+     * "80 %" and shoves whatever is beside it sideways.
+     */
+    private fun fixedValueLabel(): JLabel = JLabel().apply {
+        font = Theme.VALUE_FONT
+        val metrics = getFontMetrics(font)
+        val widest = maxOf(metrics.stringWidth("MUTED"), metrics.stringWidth("100 %")) + 6
+        val fixed = Dimension(widest, metrics.height)
+        preferredSize = fixed
+        minimumSize = fixed
+        maximumSize = fixed
     }
 
     private fun label(text: String) = JLabel(text).apply {
@@ -2596,6 +2211,9 @@ class MainWindow : JFrame("Omega-Plugin") {
                     )
                 }
             }
+            // Two captures at a small buffer is the one load this program knows in advance it may
+            // not carry, so it is said at the moment the buffer is settled.
+            announceSplitLoad()
         }
     }
 
@@ -3039,8 +2657,10 @@ class MainWindow : JFrame("Omega-Plugin") {
 
         refreshButton.isEnabled = enabled
         // Nor can the chain order — delay lines and reverb tails would be carried into a new
-        // position mid-stream, which is audible.
-        board.locked = !enabled
+        // position mid-stream, which is audible. Both boards: the second is in the engine whether
+        // or not it is heard.
+        board.view.locked = !enabled
+        board2.view.locked = !enabled
     }
 
     // ------------------------------------------------------------------ session
@@ -3073,7 +2693,7 @@ class MainWindow : JFrame("Omega-Plugin") {
      * captured sound's own name, and is blank when there is none.
      */
     private fun currentSession() = Session(
-        sound = Preset.capture(loaded?.name.orEmpty(), board.order, allEffects(), loadedFileRefs()),
+        sound = captureSound(loaded?.name.orEmpty()),
         edited = edited,
         backend = selectedBackend?.id?.name,
         input = deviceRef(inputCombo.selectedItem),
@@ -3155,20 +2775,9 @@ class MainWindow : JFrame("Omega-Plugin") {
     private fun restoreSound(session: Session) {
         restoring = true
         try {
-            syncSlots(session.sound.fx)
-
-            val order = session.sound.applyTo(allEffects())
-            val pedalOrder = order.filter { it !== master }
-            board.setOrder(pedalOrder)
-            reselectSlotTypes(session.sound.fx)
-            renumberSlots()
-            board.syncFromEffects()
-            chain.replaceAll(listOf(master) + pedalOrder)
-            updateMaster()
-
             // With the stream down, so a capture is never loaded into a running callback and its
             // warm-up costs nothing anyone hears.
-            val missing = listOfNotNull(restoreNam(session.sound), restoreIr(session.sound))
+            val missing = applySound(session.sound)
 
             // The name is only claimed back if the preset is still on disk. Otherwise "Save" would
             // quietly recreate a preset that was deleted between runs — while the sound itself, which
@@ -3382,6 +2991,15 @@ class MainWindow : JFrame("Omega-Plugin") {
 
         /** Appended to a take's name for the copy carrying the click and the kit. */
         const val TWIN_SUFFIX = " - drums"
+
+        /**
+         * The smallest buffer two amp captures are expected to hold.
+         *
+         * One capture measured at 97.7 % of a 64-frame period, so two will not fit at 64 and are on
+         * the line at 128. Said rather than enforced: the machine may be faster than the one that
+         * was measured, and `realtimeRatio` will tell the truth either way.
+         */
+        const val SPLIT_NAM_FRAMES = 256
 
         /**
          * How many taps the tempo is averaged over.

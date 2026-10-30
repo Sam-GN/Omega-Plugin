@@ -586,7 +586,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     if (positional.size < 2) {
         println("usage: ${if (measure) "--measure" else "--selftest"} " +
             "[--backend=asio] [--buffer=128] <input substring> <output substring> [seconds]" +
-            if (measure) "" else " [--tone]")
+            if (measure) "" else " [--chain] [--split] [--stress] [--tone]")
         println()
         listDevices()
         return
@@ -662,34 +662,41 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     // could run. The FX slot is in here at its heaviest setting rather than its default: a slot
     // holding a reverb is the most expensive thing it can be, and the number worth knowing is the
     // worst case, not the typical one.
-    val pedals = if (argv.contains("--chain")) {
-        listOf(
-            org.example.dsp.Gate(),
-            org.example.dsp.Compressor(),
-            org.example.dsp.Eq().apply {
-                // Flat bands are skipped by design, so an untouched EQ would measure as free and
-                // report a cost this chain does not actually have. Every band is given something.
-                lowCut.value = 80f
-                midGain.value = -6f
-                mid2Gain.value = 3f
-                lowGain.value = 2f
-                highGain.value = -4f
-            },
-            org.example.dsp.Gain(),
-            org.example.dsp.Overdrive(),
-            org.example.dsp.FxSlot().apply { selectType("Reverb") },
-            org.example.dsp.Delay(),
-            org.example.dsp.Reverb(),
-        )
-    } else {
-        emptyList()
-    }
+    //
+    // A board's LEVEL is in here too, active, because that is how it runs in split mode and it is
+    // the only module the application always carries that this list would otherwise leave out.
+    fun shippingChain(): List<org.example.dsp.AudioProcessor> = listOf(
+        org.example.dsp.Gate(),
+        org.example.dsp.Compressor(),
+        org.example.dsp.Eq().apply {
+            // Flat bands are skipped by design, so an untouched EQ would measure as free and
+            // report a cost this chain does not actually have. Every band is given something.
+            lowCut.value = 80f
+            midGain.value = -6f
+            mid2Gain.value = 3f
+            lowGain.value = 2f
+            highGain.value = -4f
+        },
+        org.example.dsp.Gain(),
+        org.example.dsp.Overdrive(),
+        org.example.dsp.FxSlot().apply { selectType("Reverb") },
+        org.example.dsp.Delay(),
+        org.example.dsp.Reverb(),
+        org.example.dsp.BoardLevel().apply { active = true },
+    )
+    val pedals = if (argv.contains("--chain")) shippingChain() else emptyList()
     val chain = when {
         probe != null -> EffectChain(listOf(probe) + pedals)
         tone -> EffectChain(listOf(TestTone()) + pedals)
         else -> EffectChain(pedals)
     }
+    // --split is the application's split mode: the same chain again on a second board, summed with
+    // the first. It is the worst case the shipping program can be put in without a file on disk,
+    // and the one the "two boards need a bigger buffer" advice has to be measured against.
+    val split = argv.contains("--split")
+    val second = if (split) EffectChain(shippingChain()) else null
     if (pedals.isNotEmpty()) println("chain   : ${pedals.joinToString(" -> ") { it.name }}, all enabled")
+    if (split) println("split   : a second board running the same chain, summed with the first")
     if (measure) {
         println("measure : 1470 Hz burst out, Goertzel detector in. Patch a lead from OUT to IN.")
     } else if (tone) {
@@ -714,7 +721,15 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
         }, "stress").apply { isDaemon = true; start() }
     }
 
-    val engine = AudioEngine(chain)
+    // The master, after the sum, as the application runs it — at 100 %, so a tone or a probe burst
+    // leaves at the level it was asked for. Only with --chain: without it there is no DSP to measure.
+    val post = if (pedals.isNotEmpty()) {
+        EffectChain(listOf(org.example.dsp.MasterVolume().apply { volume.value = 100f }))
+    } else {
+        null
+    }
+    val engine = AudioEngine(chain, second = second, post = post)
+    engine.split = split
     engine.onError = { println("stream error: $it") }
 
     try {

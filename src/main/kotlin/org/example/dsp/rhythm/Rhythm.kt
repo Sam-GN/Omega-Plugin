@@ -280,15 +280,17 @@ object Feels {
     }
 
     /**
-     * The drum patterns, per signature.
+     * The drum patterns, per signature: two or three for each bar.
      *
-     * Deliberately few. Each one earns its place by being a *different* thing to practise against
-     * rather than by filling out a list — Rock and Half-time differ only in where the snare lands,
-     * and that single change is what makes a riff feel twice as slow. The catalogue is meant to grow
-     * by somebody noticing what is missing while playing, not by anticipating it here.
+     * Each one earns its place by being a *different* thing to practise against rather than by
+     * filling out a list — Rock and Half-time differ only in where the snare lands, and that single
+     * change is what makes a riff feel twice as slow. Within a signature the set is meant to span
+     * what a guitarist actually meets in that bar: in 3/4 a waltz, a jazz waltz and a rock ballad
+     * are three different time feels, not three flavours of one.
      *
-     * 2/4 has none. A march is a click on 1 and 2 with a snare on the 2, which the click styles
-     * already give you, and inventing a polka to fill the row would be padding.
+     * A name shared between signatures — Driving in both 6/8 and 12/8 — is deliberate. SIG changes
+     * keep the feel by name where the new bar has one, so a player switching between the two
+     * compound bars stays on the same kind of groove.
      */
     private fun grooves(sig: TimeSignature): List<Pattern> = when (sig) {
         TimeSignature.FOUR_FOUR -> listOf(
@@ -324,6 +326,23 @@ object Feels {
                 Voice.RIM to "..x.x.",
                 Voice.KICK to "X.....",
             ),
+            // The ride figure of a jazz waltz — 1, 2, and-of-2, 3 — swung, with a cross-stick on 3.
+            // The swing is what makes it one; straight, the same grid is a stiff Waltz with an
+            // extra hat.
+            groove(
+                "Jazz waltz", sig, 2, 0.33f,
+                Voice.HAT_CLOSED to "x.xxx.",
+                Voice.RIM to "....x.",
+                Voice.KICK to "X.....",
+            ),
+            // A rock ballad in three: full snare on 3 and a kick pushing in on the and-of-2, which
+            // is what gives a slow 3/4 some forward lean instead of a lilt.
+            groove(
+                "Rock waltz", sig, 2, 0f,
+                Voice.HAT_CLOSED to "xoxoxo",
+                Voice.SNARE to "....X.",
+                Voice.KICK to "X..x..",
+            ),
         )
 
         // Rim rather than snare: a full backbeat at ballad tempo flattens the part it is under.
@@ -334,6 +353,22 @@ object Feels {
                 Voice.RIM to "...X..",
                 Voice.KICK to "X.....",
             ),
+            // Both pulses on the kick and a side-stick on the third eighth of each — the skip that
+            // makes a jig a jig rather than a slow 6/8.
+            groove(
+                "Jig", sig, 3, 0f,
+                Voice.HAT_CLOSED to "xoxxox",
+                Voice.RIM to "..x..x",
+                Voice.KICK to "X..X..",
+            ),
+            // The rock 6/8: backbeat on the second pulse, and a kick on the last eighth leading
+            // back into 1. The pickup is the whole difference from Ballad at the same tempo.
+            groove(
+                "Driving", sig, 3, 0f,
+                Voice.HAT_CLOSED to "xoxxox",
+                Voice.SNARE to "...X..",
+                Voice.KICK to "X....x",
+            ),
         )
 
         TimeSignature.TWELVE_EIGHT -> listOf(
@@ -343,9 +378,48 @@ object Feels {
                 Voice.SNARE to "...X.....X..",
                 Voice.KICK to "X.....X.....",
             ),
+            // Slow blues with the hats accented on every pulse and a kick on the third eighth of 1
+            // and 3: the band leaning on it rather than sitting back.
+            groove(
+                "Driving", sig, 3, 0f,
+                Voice.HAT_CLOSED to "XoxXoxXoxXox",
+                Voice.SNARE to "...X.....X..",
+                Voice.KICK to "X.x...X.x...",
+            ),
+            // The fifties ballad: soft triplets throughout and a side-stick on 2 and 4. Nothing in
+            // it is loud, which is the point — it is the piano's part played on the hats.
+            groove(
+                "Doo-wop", sig, 3, 0f,
+                Voice.HAT_CLOSED to "oooooooooooo",
+                Voice.RIM to "...x.....x..",
+                Voice.KICK to "X.....X.....",
+            ),
         )
 
-        TimeSignature.TWO_FOUR -> emptyList()
+        TimeSignature.TWO_FOUR -> listOf(
+            // Bass drum on both beats, snare on the second. The whole of a march, and the click
+            // styles do not quite give it: the kick under the snare on 2 is what makes it walk.
+            groove(
+                "March", sig, 2, 0f,
+                Voice.HAT_CLOSED to "xoxo",
+                Voice.SNARE to "..X.",
+                Voice.KICK to "X.x.",
+            ),
+            // Oom-pah: kick on the beats, snare on the off-beats, nothing on top.
+            groove(
+                "Polka", sig, 2, 0f,
+                Voice.HAT_CLOSED to "xoxo",
+                Voice.SNARE to ".x.x",
+                Voice.KICK to "X.X.",
+            ),
+            // The country train beat: the snare runs sixteenths with the backbeat accented, over a
+            // kick on both beats. Four steps to the pulse — the only pattern that needs them.
+            groove(
+                "Train", sig, 4, 0f,
+                Voice.SNARE to "ooooXooo",
+                Voice.KICK to "X...x...",
+            ),
+        )
     }
 
     fun forSignature(signature: TimeSignature): List<Pattern> = BY_SIGNATURE.getValue(signature)

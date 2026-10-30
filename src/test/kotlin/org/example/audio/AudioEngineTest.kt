@@ -217,6 +217,114 @@ class AudioEngineTest {
     }
 
     /** Bytes this thread has allocated, or -1 where the JVM will not say. */
+    // ---- split mode ----------------------------------------------------------
+
+    private fun splitEngine(
+        first: AudioProcessor? = null,
+        second: AudioProcessor,
+        post: AudioProcessor? = null,
+    ) = AudioEngine(
+        EffectChain(listOfNotNull(first)),
+        second = EffectChain(listOf(second)),
+        post = post?.let { EffectChain(listOf(it)) },
+    )
+
+    @Test
+    fun `with split off the second board is neither heard nor run`() {
+        val counter = Counter()
+        val engine = splitEngine(second = counter)
+        val output = render(engine, FloatArray(64) { 0.25f })
+        for (v in output) assertEquals(0.25f, v, 1e-6f, "the first board alone")
+        assertEquals(0, counter.blocks, "an idle second board must cost nothing")
+        assertTrue(!engine.secondRunning)
+    }
+
+    @Test
+    fun `with split on the second board is summed in, after a fade rather than a step`() {
+        val engine = splitEngine(second = Doubler())
+        engine.split = true
+        assertTrue(engine.secondRunning)
+        val input = FloatArray(64) { 0.25f }
+        val first = render(engine, input)
+        // The fade starts from nothing: the very first sample carries almost none of the second
+        // board, and a sum that arrived at full strength on sample one would be the click.
+        assertTrue(first[0] < 0.26f, "the second board stepped in at full strength: ${first[0]}")
+        var last = first
+        repeat(2_000) { last = render(engine, input) }
+        // 0.25 from the first board plus 0.5 from the doubled copy.
+        for (v in last) assertEquals(0.75f, v, 1e-3f, "the settled sum")
+    }
+
+    @Test
+    fun `switching split off fades the second board out and then stops running it`() {
+        val counter = Counter()
+        val engine = splitEngine(second = counter)
+        engine.split = true
+        val input = FloatArray(64) { 0.25f }
+        repeat(2_000) { render(engine, input) }
+        engine.split = false
+        repeat(2_000) { render(engine, input) }
+        val after = counter.blocks
+        assertTrue(!engine.secondRunning, "the fade-out never finished")
+        repeat(100) { render(engine, input) }
+        assertEquals(after, counter.blocks, "the second board kept running after its fade")
+        for (v in render(engine, input)) assertEquals(0.25f, v, 1e-6f, "back to the first board alone")
+    }
+
+    @Test
+    fun `the fade never steps the output`() {
+        // Identity on both boards and a DC input: the sum travels from 0.5 to 1.0 and must get
+        // there by small moves. A step of more than a hundredth is audible.
+        val engine = splitEngine(second = Gainer(1f))
+        val input = FloatArray(64) { 0.5f }
+        var previous = render(engine, input).last()
+        engine.split = true
+        repeat(1_000) {
+            val block = render(engine, input)
+            for (v in block) {
+                assertTrue(abs(v - previous) < 0.01f, "stepped from $previous to $v")
+                previous = v
+            }
+        }
+        engine.split = false
+        repeat(1_000) {
+            val block = render(engine, input)
+            for (v in block) {
+                assertTrue(abs(v - previous) < 0.01f, "stepped from $previous to $v")
+                previous = v
+            }
+        }
+    }
+
+    @Test
+    fun `the post stage runs on the sum of both boards`() {
+        val engine = splitEngine(second = Doubler(), post = Gainer(0.5f))
+        engine.split = true
+        val input = FloatArray(64) { 0.25f }
+        var last = FloatArray(0)
+        repeat(2_000) { last = render(engine, input) }
+        // (0.25 + 0.5) × 0.5: the master after the fork, not before it.
+        for (v in last) assertEquals(0.375f, v, 1e-3f)
+    }
+
+    @Test
+    fun `render with a second board does not allocate either`() {
+        val engine = splitEngine(first = Gainer(1.5f), second = Doubler(), post = Gainer(0.5f))
+        engine.split = true
+        val input = FloatArray(256) { kotlin.math.sin(it * 0.05).toFloat() }
+        val output = FloatArray(256)
+        repeat(2_000) { engine.render(input, output, 256) }
+
+        val before = allocatedBytes()
+        if (before < 0) return
+        repeat(20_000) { engine.render(input, output, 256) }
+        val allocated = allocatedBytes() - before
+        assertTrue(
+            allocated < 64 * 1024,
+            "render() allocated $allocated bytes over 20 000 split blocks; the callback path must not allocate",
+        )
+    }
+
     private fun allocatedBytes(): Long = try {
         val bean = java.lang.management.ManagementFactory.getThreadMXBean()
         val method = bean.javaClass.getMethod("getCurrentThreadAllocatedBytes")
@@ -246,6 +354,19 @@ class AudioEngineTest {
         override fun prepare(sampleRate: Float, maxBlockFrames: Int) {}
         override fun process(buffer: FloatArray, count: Int) {
             for (i in 0 until count) buffer[i] = buffer[i] * 2f
+        }
+        override fun reset() {}
+    }
+
+    /** Passes the signal through and counts how often it was asked to. */
+    private class Counter : AudioProcessor {
+        var blocks = 0
+        override val name = "Counter"
+        override var enabled = true
+        override val parameters = emptyList<Parameter>()
+        override fun prepare(sampleRate: Float, maxBlockFrames: Int) {}
+        override fun process(buffer: FloatArray, count: Int) {
+            blocks++
         }
         override fun reset() {}
     }

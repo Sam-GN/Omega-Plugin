@@ -275,7 +275,7 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
      */
     class IconButton(kind: Kind, onClick: () -> Unit) : HeaderIcon(onClick) {
 
-        enum class Kind { ADD, EXPAND, COLLAPSE, EYE, EYE_CLOSED }
+        enum class Kind { ADD, EXPAND, COLLAPSE, EYE, EYE_CLOSED, SPLIT, SPLIT_OFF }
 
         var kind: Kind = kind
             set(value) {
@@ -297,7 +297,29 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
                 Kind.COLLAPSE -> chevrons(g2, cx, cy, apart = false)
                 Kind.EYE -> eye(g2, cx, cy, struck = false)
                 Kind.EYE_CLOSED -> eye(g2, cx, cy, struck = true)
+                Kind.SPLIT -> fork(g2, cx, cy, struck = false)
+                Kind.SPLIT_OFF -> fork(g2, cx, cy, struck = true)
             }
+        }
+
+        /**
+         * One cable in, two out: a Y-lead, which is what split mode is in signal terms.
+         *
+         * Struck means *one board*, the way the eye's stroke means *hidden*: the line says what is
+         * true now, and pressing the icon removes it. Grey at rest in both states like every other
+         * header glyph, orange only under the pointer — an active split is shown by the second board
+         * being on screen, not by an icon staying lit.
+         */
+        private fun fork(g2: Graphics2D, cx: Int, cy: Int, struck: Boolean) {
+            g2.drawLine(cx - FORK_REACH, cy, cx - 1, cy)
+            val arms = Path2D.Float()
+            arms.moveTo(cx + FORK_REACH.toFloat(), cy - FORK_SPREAD)
+            arms.lineTo(cx + 2f, cy - FORK_SPREAD)
+            arms.lineTo(cx - 1f, cy.toFloat())
+            arms.lineTo(cx + 2f, cy + FORK_SPREAD)
+            arms.lineTo(cx + FORK_REACH.toFloat(), cy + FORK_SPREAD)
+            g2.draw(arms)
+            if (struck) g2.drawLine(cx - FORK_REACH, cy + 6, cx + FORK_REACH, cy - 6)
         }
 
         /**
@@ -354,6 +376,12 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
             const val EYE_LID = 8f
 
             const val EYE_PUPIL = 5f
+
+            /** Half the fork's width, matched to the eye's so the two sit as a pair. */
+            const val FORK_REACH = 7
+
+            /** How far each arm sits from the centre line. */
+            const val FORK_SPREAD = 5f
         }
     }
 

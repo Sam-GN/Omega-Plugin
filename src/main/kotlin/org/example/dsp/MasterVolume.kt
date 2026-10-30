@@ -19,68 +19,16 @@
  */
 package org.example.dsp
 
-import kotlin.math.exp
-
 /**
- * Master level, first in the chain.
+ * Master level, **last** in the signal path: after the boards have been summed and before the
+ * rhythm section is mixed in.
  *
- * Unlike the other pedals its switch is a **mute**, not a bypass: switching it off drives the signal
- * to silence rather than passing it through untouched. [mutesWhenDisabled] tells [EffectChain] to
- * keep calling [process] while disabled, so the mute can ramp over a few milliseconds instead of
- * cutting the waveform mid-cycle, which would click.
+ * It used to be first, ahead of the gate, which made it an input trim rather than a master — turning
+ * it down fed less into the drive and changed the sound as well as the loudness. At the end it
+ * changes only how loud the finished sound is, which is what a master is for. It still does not
+ * touch the metronome, which has a level of its own.
+ *
+ * Everything about how it moves — the mute that ramps rather than cuts, the squared taper — is
+ * [VolumeStage]'s, shared with each board's LEVEL.
  */
-class MasterVolume : AudioProcessor {
-
-    override val name = "Master"
-
-    @Volatile
-    override var enabled = true
-
-    override val mutesWhenDisabled = true
-
-    val volume = Parameter("Volume", 0f, 100f, 80f, "%")
-
-    override val parameters = listOf(volume)
-
-    private var smoothing = smoothingFor(DEFAULT_SAMPLE_RATE)
-    private var current = 0f
-
-    override fun prepare(sampleRate: Float, maxBlockFrames: Int) {
-        smoothing = smoothingFor(sampleRate)
-    }
-
-    override fun process(buffer: FloatArray, count: Int) {
-        val target = if (enabled) taper(volume.value) else 0f
-        val s = smoothing
-        var g = current
-        for (i in 0 until count) {
-            g += (target - g) * s
-            buffer[i] *= g
-        }
-        current = g
-    }
-
-    override fun reset() {
-        current = if (enabled) taper(volume.value) else 0f
-    }
-
-    private companion object {
-        /**
-         * ~11 ms, so a mute lands fast enough to feel instant but without a step. Held in seconds
-         * rather than as a per-sample coefficient so the ramp takes the same *time* on every device.
-         */
-        const val SMOOTHING_SECONDS = 500f / 44_100f
-
-        fun smoothingFor(sampleRate: Float): Float = 1f - exp(-1f / (sampleRate * SMOOTHING_SECONDS))
-
-        /**
-         * Loudness is not linear in knob travel. Squaring puts half travel near -12 dB, which is
-         * where a volume control feels halfway, and keeps 0 % at exact silence rather than merely
-         * quiet — so the bottom of the knob and the mute switch agree.
-         */
-        fun taper(percent: Float): Float {
-            val x = percent / 100f
-            return x * x
-        }
-    }
-}
+class MasterVolume : VolumeStage("Master", 80f)

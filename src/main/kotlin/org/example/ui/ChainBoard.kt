@@ -20,10 +20,12 @@
 package org.example.ui
 
 import org.example.dsp.AudioProcessor
+import java.awt.AlphaComposite
 import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Cursor
 import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
@@ -38,6 +40,7 @@ import javax.swing.JPanel
 import javax.swing.JViewport
 import javax.swing.Scrollable
 import javax.swing.SwingUtilities
+import javax.swing.event.ChangeListener
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -152,6 +155,44 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
     private val eye = EffectPanel.IconButton(EffectPanel.IconButton.Kind.EYE) { toggleHideDisabled() }
         .apply { toolTipText = "Hide the pedals that are switched off" }
 
+    /**
+     * The header lane's two ends. Whatever the window adds here is pinned to the top of the board,
+     * beside the eye on the left and against the far edge on the right, and stays in view when the
+     * board scrolls — the same treatment the eye has always had.
+     *
+     * The right end grows the lane to fit what it holds, so a LEVEL knob there does not overlap the
+     * first row of pedals. Hidden, it costs no height at all.
+     */
+    val headerLeft: JPanel = JPanel(FlowLayout(FlowLayout.LEFT, HEADER_GAP, 0)).apply { backed() }
+    val headerRight: JPanel = JPanel(FlowLayout(FlowLayout.RIGHT, HEADER_GAP, 0)).apply {
+        backed()
+        isVisible = false
+    }
+
+    /**
+     * Opaque in the board's own background colour. Invisible while the header sits in its lane, and
+     * what keeps the controls legible when the board has scrolled a row of pedals up underneath
+     * them — see [raiseHeader] for the other half of that.
+     */
+    private fun JPanel.backed() {
+        isOpaque = true
+        background = Theme.BACKGROUND
+    }
+
+    /**
+     * Opacity of the whole board, 0 to 1, for the second board arriving and leaving in split mode.
+     *
+     * Applied in [paint] so the pedals, the cables and the header all go together; see
+     * [EffectPanel.fade] for why `paintComponent` would not do.
+     */
+    var alpha: Float = 1f
+        set(value) {
+            val clamped = value.coerceIn(0f, 1f)
+            if (field == clamped) return
+            field = clamped
+            repaint()
+        }
+
     private fun toggleHideDisabled() {
         hideDisabled = !hideDisabled
     }
@@ -259,7 +300,9 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
     init {
         isOpaque = false
         panels.forEach { attach(it) }
-        add(eye)
+        headerLeft.add(eye)
+        add(headerLeft)
+        add(headerRight)
         applyCursors()
     }
 
@@ -405,7 +448,8 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         // at the top — which is all the eye strictly needs — pushed the whole reservation above the
         // pedals and left none below, so the board had a margin along its top edge and its bottom row
         // pressed against the border.
-        var y = TOP_LANE + ((height - TOP_LANE * 2 - total) / 2).coerceAtLeast(0)
+        val lane = laneHeight()
+        var y = lane + ((height - lane * 2 - total) / 2).coerceAtLeast(0)
 
         rows.forEachIndexed { index, row ->
             var x = (width - rowWidth(row)) / 2
@@ -422,7 +466,7 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
 
     override fun doLayout() {
         computeSlots()
-        placeEye()
+        placeHeader()
         // A resize should land immediately; only a drag, a fade or a reshuffle animates. Easing a
         // window resize would make the board lag the frame edge.
         if (dragged == null && !settling && !fading && !shuffling) {
@@ -433,26 +477,89 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         }
     }
 
+    /** The strip across the top that no pedal is laid into: the eye's, grown to fit a LEVEL knob. */
+    private fun laneHeight(): Int =
+        if (headerRight.isVisible && headerRight.componentCount > 0) {
+            maxOf(TOP_LANE, headerRight.preferredSize.height + HEADER_LANE_PAD)
+        } else {
+            TOP_LANE
+        }
+
     /**
-     * Pins the eye to the top-left of what is actually on screen.
+     * Pins the header to the top of what is actually on screen.
      *
      * The board is taller than its viewport whenever the chain needs more rows than fit, and a
      * control that scrolls off the top is a control you have to go looking for to undo what it did.
+     * The right end is kept inside the board's own height, so on a short board below a tall one it
+     * does not float up over its neighbour.
      */
-    private fun placeEye() {
-        val top = (parent as? JViewport)?.viewPosition?.y ?: 0
-        val size = eye.preferredSize
-        eye.setBounds(EYE_LEFT, top + EYE_TOP, size.width, size.height)
+    private fun placeHeader() {
+        val top = visibleTop()
+        val left = headerLeft.preferredSize
+        headerLeft.setBounds(EYE_LEFT, top + EYE_TOP, left.width, left.height)
+        val right = headerRight.preferredSize
+        headerRight.setBounds(
+            width - right.width - HEADER_RIGHT,
+            top + ((laneHeight() - right.height) / 2).coerceAtLeast(0),
+            right.width,
+            right.height,
+        )
+        raiseHeader()
     }
+
+    /**
+     * Puts the header above every pedal in the stacking order.
+     *
+     * Swing paints a container's children from the highest index down, so a child added last is
+     * painted first — underneath. The header was added after the pedals and sat beneath them, which
+     * nobody saw while it stayed in its lane and everybody saw once the board scrolled: a pinned
+     * control that the pedals slide over is a control that disappears exactly when it is needed.
+     * Index 0 is painted last. A lifted pedal takes index 0 for the length of its drag and the next
+     * layout, or the drop itself, puts the header back on top.
+     */
+    private fun raiseHeader() {
+        setComponentZOrder(headerRight, 0)
+        setComponentZOrder(headerLeft, 0)
+    }
+
+    /**
+     * Where the viewport's top edge falls in this board's coordinates, clamped to the board.
+     *
+     * The board used to be the viewport's child and read `viewPosition` directly. It now sits inside
+     * a stack of boards, so the position has to be translated through whatever is in between — and
+     * when this board is scrolled entirely off the top, the header stays at its last row rather than
+     * following the viewport out of the board.
+     */
+    private fun visibleTop(): Int {
+        val viewport = SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport
+            ?: return 0
+        val view = viewport.view ?: return 0
+        val top = SwingUtilities.convertPoint(view, 0, viewport.viewPosition.y, this).y
+        return top.coerceIn(0, (height - laneHeight()).coerceAtLeast(0))
+    }
+
+    private val viewportListener = ChangeListener {
+        placeHeader()
+        repaint()
+    }
+    private var watchedViewport: JViewport? = null
 
     override fun addNotify() {
         super.addNotify()
-        // Scrolling moves the viewport without laying the board out again, so the eye has to be
+        // Scrolling moves the viewport without laying the board out again, so the header has to be
         // told separately or it rides away with the content.
-        (parent as? JViewport)?.addChangeListener {
-            placeEye()
-            repaint()
+        val viewport = SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport
+        if (viewport !== watchedViewport) {
+            watchedViewport?.removeChangeListener(viewportListener)
+            viewport?.addChangeListener(viewportListener)
+            watchedViewport = viewport
         }
+    }
+
+    override fun removeNotify() {
+        watchedViewport?.removeChangeListener(viewportListener)
+        watchedViewport = null
+        super.removeNotify()
     }
 
     override fun getPreferredSize(): Dimension {
@@ -460,15 +567,40 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         // than an unbounded one, or seven pedals would open a window wider than most screens.
         val available = if (width > 0) width else UNSIZED_WIDTH
         val grouped = wrap(available)
+        return Dimension(grouped.maxOf { rowWidth(it) }, preferredHeightAt(available))
+    }
+
+    /**
+     * The height the board wants at [available] pixels wide.
+     *
+     * Separate from [getPreferredSize] because the stack that holds two boards decides their widths
+     * and has to ask about heights before it has laid anything out.
+     */
+    fun preferredHeightAt(available: Int): Int {
+        val grouped = wrap(available)
         val rows = grouped.size * pedalHeight() + (grouped.size - 1).coerceAtLeast(0) * ROW_GAP
-        return Dimension(
-            grouped.maxOf { rowWidth(it) },
-            // The eye's lane is claimed at both ends, not just the top. [computeSlots] centres the
-            // rows in whatever height it is given, so asking for the lane only once left the whole
-            // reservation above the pedals and none below — a gap along the top edge and the bottom
-            // row pressed against the border. Claiming it twice makes the centring symmetric.
-            TOP_LANE + rows + TOP_LANE,
-        )
+        // The header's lane is claimed at both ends, not just the top. [computeSlots] centres the
+        // rows in whatever height it is given, so asking for the lane only once left the whole
+        // reservation above the pedals and none below — a gap along the top edge and the bottom
+        // row pressed against the border. Claiming it twice makes the centring symmetric.
+        val lane = laneHeight()
+        return lane + rows + lane
+    }
+
+    /** The whole board, children included, at [alpha]. Free when nothing is fading. */
+    override fun paint(g: Graphics) {
+        if (alpha >= 1f) {
+            super.paint(g)
+            return
+        }
+        if (alpha <= 0f) return
+        val g2 = g.create() as Graphics2D
+        try {
+            g2.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha)
+            super.paint(g2)
+        } finally {
+            g2.dispose()
+        }
     }
 
     override fun getMinimumSize(): Dimension =
@@ -538,6 +670,8 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         // disagree.
         onReorder?.invoke(order)
         settling = true
+        // The lifted pedal was raised above everything for its drag; the header goes back on top.
+        raiseHeader()
         animator.start()
     }
 
@@ -853,6 +987,13 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
          */
         const val EYE_LEFT = 10
         const val EYE_TOP = 4
+
+        /** Between the header's controls, and between the right end and the board's edge. */
+        const val HEADER_GAP = 6
+        const val HEADER_RIGHT = 14
+
+        /** Clear space the lane keeps above and below a control taller than the eye. */
+        const val HEADER_LANE_PAD = 8
 
         const val SAG = 14.0
         const val JACK = 3.5

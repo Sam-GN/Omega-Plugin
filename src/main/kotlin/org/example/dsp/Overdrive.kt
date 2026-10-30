@@ -19,60 +19,44 @@
  */
 package org.example.dsp
 
-import kotlin.math.PI
-import kotlin.math.exp
-import kotlin.math.tanh
-
 /**
- * Soft-clipping overdrive.
+ * The drive pedal: one fixed place on the board, and a dropdown that picks which kind of drive it
+ * is. The knobs are the chosen type's own — three on a Screamer, two on a fuzz, four on a tube
+ * stage — which is what makes one pedal do the job of a row of them.
  *
- * `tanh` gives a smooth, asymptotic knee rather than the harsh corners of hard clipping, which is
- * what makes it sound like a driven tube stage instead of digital wrap-around. The output is
- * normalised by `1/tanh(drive)` so cranking drive adds harmonics without also adding raw level, and
- * a one-pole lowpass afterwards tames the fizz the clipper generates up top.
+ * A [TypedModule], so switching is a fade rather than a click, every type is warmed before the
+ * stream starts, and a preset keeps every type's knobs. The first type is the sound the pedal
+ * always had, under the same three knob names, so a preset from before the dropdown existed lands
+ * on it unchanged.
  *
- * The lowpass coefficient is derived from the device rate: baked in at 44.1 kHz, the tone control
- * would land roughly 9 % high on a 48 kHz device and be wrong by an octave at 96 kHz.
+ * These are voicings *in the style of* the pedals they are named after, not models of them: the
+ * shape of the clipping and the filters that family has. A NAM capture is what a real one sounds
+ * like. See `Drives.kt` for what each one does.
  */
-class Overdrive : AudioProcessor {
+class Overdrive : TypedModule(TYPES) {
 
     override val name = "Overdrive"
 
-    @Volatile
-    override var enabled = false
+    private val smooth = instance(0) as SmoothDrive
 
-    val drive = Parameter("Drive", 1f, 50f, 8f, "x", skew = 2f)
-    val tone = Parameter("Tone", 200f, 8000f, 3000f, "Hz", skew = 2f)
-    val level = Parameter("Level", 0f, 1f, 0.7f)
+    /** The original sound's knobs, reachable directly — the headless tests and `--selftest` use them. */
+    val drive: Parameter get() = smooth.drive
+    val tone: Parameter get() = smooth.tone
+    val level: Parameter get() = smooth.level
 
-    override val parameters = listOf(drive, tone, level)
+    companion object {
+        /**
+         * The drives. **Append only** — see [TypedModule]. `Smooth` stays first because it is the
+         * default, and the default is the sound every existing preset was saved with.
+         */
+        private val TYPES = listOf(
+            ModuleType("Smooth") { SmoothDrive() },
+            ModuleType("Screamer") { ScreamerDrive() },
+            ModuleType("Rat") { RatDrive() },
+            ModuleType("Fuzz") { FuzzDrive() },
+            ModuleType("Tube") { TubeDrive() },
+        )
 
-    private var sampleRate = DEFAULT_SAMPLE_RATE
-    private var lowpass = 0f
-
-    override fun prepare(sampleRate: Float, maxBlockFrames: Int) {
-        this.sampleRate = sampleRate
+        val typeNames: List<String> get() = TYPES.map { it.label }
     }
-
-    override fun process(buffer: FloatArray, count: Int) {
-        val d = drive.value
-        val normalise = 1f / tanh(d)
-        val a = lowpassCoefficient(tone.value)
-        val lvl = level.value
-
-        var lp = lowpass
-        for (i in 0 until count) {
-            val clipped = tanh(buffer[i] * d) * normalise
-            lp += a * (clipped - lp)
-            buffer[i] = lp * lvl
-        }
-        lowpass = lp
-    }
-
-    override fun reset() {
-        lowpass = 0f
-    }
-
-    private fun lowpassCoefficient(cutoffHz: Float): Float =
-        (1f - exp(-2f * PI.toFloat() * cutoffHz / sampleRate)).coerceIn(0f, 1f)
 }

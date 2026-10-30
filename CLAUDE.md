@@ -6,8 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A standalone realtime guitar effects processor with a Swing GUI. Audio comes in from a selected
 capture device, runs through a rearrangeable chain of pedals — gate, compressor, EQ, gain,
-overdrive, an amp capture, a cabinet, FX slots, delay, reverb, under a master volume — and goes back
-out to a selected playback device. `docs/WhatsDone.md` records what has been delivered.
+overdrive, an amp capture, a cabinet, FX slots, delay, reverb — then a master volume, and goes back
+out to a selected playback device. **Split mode** adds a second board fed the same input and summed
+with the first. `docs/WhatsDone.md` records what has been delivered.
 
 Despite the name, this is **not** an IntelliJ Platform plugin — "plugin" here means a guitar effect.
 `build.gradle.kts` applies `kotlin("jvm")` and `application`; there is no `plugin.xml` and no
@@ -82,7 +83,7 @@ the wrong JVM.
 ```
 omega.sh --list-backends                                  # what loaded, what didn't, and why
 omega.sh --list-devices                                   # devices per backend
-omega.sh --selftest [--backend=asio] [--buffer=128] [--chain] [--stress] <in> <out> [secs] [--tone]
+omega.sh --selftest [--backend=asio] [--buffer=128] [--chain] [--split] [--stress] <in> <out> [secs] [--tone]
 omega.sh --measure  [--backend=asio] [--buffer=128] <in> <out> [secs]
 ```
 
@@ -92,7 +93,9 @@ omega.sh --measure  [--backend=asio] [--buffer=128] <in> <out> [secs]
   slot set to Reverb, which is the heaviest thing a slot can hold, plus the rhythm section running
   16ths at 240 BPM. It is the only way the DSP cost gets measured; without it you are testing the
   device path alone. **Keep it in step with the shipping chain**: it drifted to four pedals once and
-  spent several versions quietly measuring less than half the app.
+  spent several versions quietly measuring less than half the app. `--split` runs that chain on a
+  second board as well, summed, which is the application's split mode and its worst case without a
+  file on disk.
   `--stress` floods the heap from a side thread — an idle machine holds almost any buffer size, so
   this is what separates "runs" from "stable". `--tone` emits 1470 Hz instead of passing the input
   through; without it the chain is empty and it is safe to point at speakers.
@@ -138,7 +141,11 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
     section" below before touching it.
 - **`ui/`** — Swing. `Knob`, `ToggleSwitch`, `LevelMeter` and `BeatLamps` are custom-painted
   `JComponent`s; `EffectPanel` builds one pedal from any `AudioProcessor` by reflecting over its
-  `parameters` list.
+  `parameters` list. `Board` is one pedal board — its effect instances, its `EffectChain`, its
+  `ChainBoard`, and the per-board state that used to be fields of `MainWindow` (which file the NAM
+  loaded, which FX slot is first) — and exists twice, because of split mode. `BoardStack` holds one
+  or two of them in the scroll view. `MainWindow` keeps what there is one of: the master, the device
+  bar, the session, the presets.
 
   **Borrowed components have to be opted in by name, one at a time.** The dark look is applied per
   instance — `DarkComboBoxUI.install(...)`, `DarkMenu.popup()`, `DarkTextField.style(...)` — not
@@ -341,8 +348,8 @@ different buffer than was asked for, a backend that would not load and why, a co
 ### Adding an effect
 
 Implement `AudioProcessor`, declare its knobs as `Parameter`s in the `parameters` list, and add it to
-the `EffectChain` in `MainWindow`. The UI needs no changes — `EffectPanel` renders whatever
-parameters it finds.
+`Board.pedals`. The UI needs no changes — `EffectPanel` renders whatever parameters it finds — and
+nor does split mode, since the second board is another `Board`.
 
 **If a module's control set can change while it is on the board** — an `FxSlot` switching type, an
 expandable module — call `EffectPanel.transitionKnobs()`, never `rebuildKnobs()` directly. It fades
@@ -367,11 +374,43 @@ knows nothing about devices; that is what makes it carry over unchanged to anoth
 `Reverb` that was ~96 000 objects a second, which is how a young-generation collection becomes an
 audible dropout. Use arrays and hoist them into locals before the loop.
 
-Chain order is deliberate and is `MainWindow.pedals`, which reads master -> gate -> compressor -> eq
--> gain -> overdrive -> nam -> ir -> fx1 -> delay -> reverb. It matches conventional pedal wiring:
-dynamics and tone shaping ahead of the distortion, the amp capture and cabinet where an amp and a
-cabinet go, and **time-based effects last so repeats and tails are not fed back into the clipper**.
-That last clause is the one worth keeping; the user can drag the rest into any order they like.
+Chain order is deliberate and is `Board.pedals`, which reads gate -> compressor -> eq -> gain ->
+overdrive -> nam -> ir -> fx1 -> delay -> reverb, then the board's own `level`, pinned. It matches
+conventional pedal wiring: dynamics and tone shaping ahead of the distortion, the amp capture and
+cabinet where an amp and a cabinet go, and **time-based effects last so repeats and tails are not
+fed back into the clipper**. That last clause is the one worth keeping; the user can drag the rest
+into any order they like.
+
+**The master is after the boards, not before them.** It sat first until 1.2.0, which made it an
+input trim — turning it down changed how hard the drive was hit. It now lives in the engine's `post`
+chain, on the sum, and a `Preset` applies it on its own: it is in the outer preset's maps beside the
+first board's pedals, and on no board.
+
+### Split mode
+
+A second `Board`, fed the same input and summed with the first. The rules it depends on:
+
+- **The second board is always in the engine**, prepared and warmed with the first, whether or not
+  split is on. Split is switched *while the stream runs*, and a board first prepared at that moment
+  would be class loading against the deadline. Idle, it costs nothing: `AudioEngine` does not run it
+  once its fade-out has finished.
+- **Switching is a fade, not a switch.** `AudioEngine.split` is one volatile store; the engine ramps
+  the second board's share over `BLEND_SECONDS` (the master's 11 ms) and snaps at -80 dB of the
+  distance, so split on and settled is a plain add and split off reaches an exact zero. The engine
+  test asserts the output never steps by more than a hundredth across either transition.
+- **Each board ends in a `BoardLevel`**, a `VolumeStage` like the master with an `active` flag. Off,
+  it ramps to unity and then returns without touching the buffer — asserted bit-for-bit — which is
+  what lets it sit in the chain permanently under the "membership never changes while running" rule.
+  Default 71 %, a gain of 0.504: two boards fed one guitar are correlated, and two at that gain sum
+  back to one board's level.
+- **A preset nests the second board** as `split`, a whole `Preset` with a blank name. Both boards
+  carry the same module names, so a second set of entries in the same maps is impossible. Absent
+  when split is off, so one-board presets are byte-identical to before; a nested board never nests a
+  third. With split off the second board is not saved but keeps its state until the process ends.
+- **Two NAM captures want 256 frames.** One capture measured at 97.7 % of a 64-frame period. The
+  window says so in the status line — on switching split on, on loading the capture, on stream
+  start — and enforces nothing; `realtimeRatio` is the arbiter.
+- **The eye is one preference across both boards**, stored once in `Config.hideDisabledModules`.
 
 ### Adding to the rhythm section
 
@@ -426,12 +465,22 @@ choice to the plain click**. That is the tolerated failure; changing what a name
 `Session` stores the rhythm as plain strings and numbers. `preset/` is free of `dsp/` for the same
 reason it is free of `audio/`.
 
-### Adding an FX slot type
+### Adding an FX slot type, or a drive
 
-Write the `AudioProcessor` as above, then add one line to `FxSlot.TYPES`. Nothing else changes — the
-dropdown, the preset format and the warm-up all read that list.
+Write the `AudioProcessor` as above, then add one line to `FxSlot.TYPES` or `Overdrive.TYPES`.
+Nothing else changes — the dropdown, the preset format and the warm-up all read that list. Both
+are a `TypedModule`: one instance of every type, the selected one running, a fade across a switch,
+every type's knobs captured. The slot is positional and numbered and goes in a preset's `fx` list;
+the Overdrive has a fixed name and goes in its `modules` map, keyed by it. A preset from before the
+Overdrive had types carries flat `Overdrive.Drive` keys and no `modules` entry, and `Board.apply`
+puts the pedal on its first type before `applyTo` so those keys land where they always did — which
+is why **the first drive stays `Smooth`, the original algorithm, with the original knob names**.
 
-Three rules the slot depends on:
+The drives are voicings in the style of a family of pedal, not models: the clipping curve, what is
+filtered out before it, what is done after. Each is tested at its loudest to stay inside full scale
+and to be silent on silence; the biased ones subtract the clipper's resting value for that.
+
+Three rules both depend on:
 
 - **Append only.** A preset stores the selection twice: by name in its `fx` list, which is what is
   read back, and incidentally as the `Type` parameter's positional index. Reorder the list and those
@@ -548,7 +597,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-313 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+336 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
 it runs on Windows too. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
@@ -586,7 +635,9 @@ you worked out yourself, not against what the code currently returns:
   throws yields silence and a flag rather than noise, short blocks leave the buffer tail alone, and
   meter ballistics attack instantly and release slowly. It also asserts that `render` **allocates
   under 64 kB over 20 000 blocks**, measured with `getCurrentThreadAllocatedBytes` — a bytes
-  assertion rather than a timing one, because allocation is what triggers the collection.
+  assertion rather than a timing one, because allocation is what triggers the collection. The split
+  tests sit beside those: an idle second board is never run, the sum arrives by a fade and leaves by
+  one, the post stage sees the sum, and the allocation bound holds with both boards running.
 
 Swing and everything that touches a driver are not unit-tested. Verify those with `--selftest`
 (add `--chain --stress` or the result means little), `--measure` if a lead is patched, and by
