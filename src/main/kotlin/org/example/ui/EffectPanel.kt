@@ -494,6 +494,19 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
             }
 
         /**
+         * A width the button never shrinks below, in pixels of text.
+         *
+         * A dropdown sets this to its widest option, so picking a shorter one does not narrow the
+         * button — and with it the pedal, and with that the wrap of the whole board. A pedal may
+         * change width because its knobs changed; it must not because a word did.
+         */
+        var reservedTextWidth: Int = 0
+            set(value) {
+                field = value
+                resize()
+            }
+
+        /**
          * Marks the button as needing attention — the file it names is not there any more.
          *
          * Red rather than blank, and still carrying the name, because those are two different
@@ -527,7 +540,8 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
         }
 
         private fun resize() {
-            val width = (getFontMetrics(font).stringWidth(label) + 18).coerceAtMost(MAX_WIDTH)
+            val text = maxOf(getFontMetrics(font).stringWidth(label), reservedTextWidth)
+            val width = (text + 18).coerceAtMost(MAX_WIDTH)
             val size = Dimension(width, 22)
             preferredSize = size
             minimumSize = size
@@ -666,7 +680,15 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
             }
             popup.show(button, 0, (button?.height ?: 0) + 2)
         }
-        button?.let { headerChoices += it to parameter }
+        button?.let { chosen ->
+            // Sized for the longest option from the start, so the pedal's width is a property of
+            // what it offers rather than of what happens to be selected.
+            val metrics = chosen.getFontMetrics(chosen.font)
+            chosen.reservedTextWidth = parameter.choices.maxOf { option ->
+                metrics.stringWidth("${option.uppercase()} $CARET")
+            }
+            headerChoices += chosen to parameter
+        }
     }
 
     private fun choiceLabel(parameter: Parameter): String =

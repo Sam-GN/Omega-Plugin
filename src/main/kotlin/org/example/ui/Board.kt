@@ -21,6 +21,7 @@ package org.example.ui
 
 import org.example.audio.ImpulseLoader
 import org.example.audio.SampleRates
+import org.example.dsp.Amp
 import org.example.dsp.AudioProcessor
 import org.example.dsp.BoardLevel
 import org.example.dsp.Compressor
@@ -81,6 +82,7 @@ class Board(private val owner: Frame, private val host: Host) {
     val eq = Eq()
     val gain = Gain()
     val overdrive = Overdrive()
+    val amp = Amp()
     val nam = Nam()
     val ir = Ir()
     val fx1 = FxSlot()
@@ -98,10 +100,13 @@ class Board(private val owner: Frame, private val host: Host) {
     // given and an EQ behind it only tidies up afterwards — and on a clean sound, which is where
     // this one earns its place, the position makes no difference at all.
     //
+    // The amp sits after the drive and before the capture, as an amp does behind a pedal; the
+    // capture and the amp are alternatives more often than a pair, but nothing stops both.
+    //
     // FX 1 lands after the cabinet and before the time effects, which is the post slot on any
     // modelling pedal and the useful default for what tends to go in it. It is only a default: like
     // every other pedal it can be dragged, and unlike them there can be more than one of it.
-    private val pedals = listOf(gate, compressor, eq, gain, overdrive, nam, ir, fx1, delay, reverb)
+    private val pedals = listOf(gate, compressor, eq, gain, overdrive, amp, nam, ir, fx1, delay, reverb)
 
     val chain = EffectChain(pedals + level)
 
@@ -143,7 +148,11 @@ class Board(private val owner: Frame, private val host: Host) {
             renumberSlots()
             host.markEdited()
         }
-        view.onEdited = { host.markEdited() }
+        view.onEdited = {
+            host.markEdited()
+            // A knob or a dropdown moved somewhere; if it was the IR's type, LOAD comes or goes.
+            syncIrHeader()
+        }
 
         // The only module that needs more than knobs. The button lives on its own pedal rather than
         // in the menu, because that is where you are looking when you want to change cabinet.
@@ -162,6 +171,21 @@ class Board(private val owner: Frame, private val host: Host) {
 
         view.panelFor(fx1)?.let { wireSlot(it, fx1) }
         renumberSlots()
+        syncIrHeader()
+    }
+
+    /**
+     * LOAD and its ✕ belong to the IR pedal's loaded-file type; a synthesised cabinet has no file
+     * to show. Hidden rather than disabled, like the ✕ always was: a LOAD that cannot load on a type
+     * that has nothing to load would be a control whose job is to explain that it does nothing.
+     */
+    private fun syncIrHeader() {
+        val file = ir.usesFile
+        val wasVisible = irButton?.isVisible
+        irButton?.isVisible = file
+        irClear?.isVisible = file && (ir.impulseName != null || ir.name in missingFiles)
+        // The header's width changed, so the pedal's does.
+        if (wasVisible != file) view.panelFor(ir)?.refreshTitle()
     }
 
     /** The pedals in signal order. */
@@ -343,7 +367,9 @@ class Board(private val owner: Frame, private val host: Host) {
         // While the stream is down, so a capture is never loaded into a running callback — and so
         // its warm-up costs nothing that anyone hears. Both are attempted whatever the other does:
         // a missing cabinet must not cost you the amp as well.
-        return listOfNotNull(restoreNam(sound), restoreIr(sound))
+        val missing = listOfNotNull(restoreNam(sound), restoreIr(sound))
+        syncIrHeader()
+        return missing
     }
 
     /** The fixed pedals with a type dropdown — the Overdrive — as distinct from the numbered slots. */

@@ -2,8 +2,9 @@
 
 A guitar effects processor for Windows and Linux. Plug your interface in, pick it in the app, and play through
 a board of pedals — gate, compressor, EQ, gain, an overdrive that is five drives from a dropdown, an
-amp capture, a cabinet, FX slots, delay, reverb and a master volume — with a metronome and a drum
-machine above it. Pedals drag into
+amp voiced as five amplifier families, an amp capture, a cabinet that is a loaded impulse response or
+one of four synthesised ones, FX slots, delay, reverb and a master volume — with a metronome and a
+drum machine above it. Pedals drag into
 any order, and FX slots are added and removed. A split switch puts a second board under the first,
 fed the same guitar and heard with it, so one sound can be a clean amp and a driven one at once.
 Despite the name, it is not an IDE plugin — "plugin" here means a guitar effect.
@@ -56,7 +57,9 @@ on one laptop, and no guitar interface has been tried there yet.
 - **BUFFER** sets the latency. 64 frames is the low-latency setting; 128 is the comfortable one. If
   you load an amp capture, use 128.
 - Amp captures (`.nam`) and cabinet impulse responses (`.wav`) are loaded with the LOAD button on the
-  `NAM` and `IR` pedals. None ship with the program.
+  `NAM` and `IR` pedals. None ship with the program. Without either, the `AMP` pedal's dropdown
+  gives you an amplifier family and the `IR` pedal's dropdown a synthesised cabinet — voicings of
+  the real things rather than models of them, and a capture of a real amp beats the voicing.
 - The fork beside the eye at the board's top-left splits the board in two. Both boards play at once,
   each with its own LEVEL in its header, and the second board's ✕ or the fork again puts it away.
   Two boards each carrying an amp capture need **256 frames** or more; the status line says so.

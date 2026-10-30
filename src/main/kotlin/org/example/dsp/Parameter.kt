@@ -49,6 +49,11 @@ class Parameter(
      * must be written by name somewhere else.
      */
     val choices: List<String> = emptyList(),
+    /**
+     * Words for the two ends of a knob whose number means little — a cabinet's MIC reads OFF-AXIS
+     * and ON-AXIS rather than 0.00 and 1.00, and a percentage in between.
+     */
+    val ends: Pair<String, String>? = null,
 ) {
 
     val isChoice: Boolean get() = choices.isNotEmpty()
@@ -85,6 +90,14 @@ class Parameter(
 
     fun formatted(): String {
         if (isChoice) return choices.getOrElse(index) { "" }
+        ends?.let { (low, high) ->
+            val where = position
+            return when {
+                where <= 0.005f -> low
+                where >= 0.995f -> high
+                else -> "${(where * 100f).roundToInt()} %"
+            }
+        }
         val decimals = when {
             max - min >= 100f -> 0
             max - min >= 10f -> 1

@@ -97,6 +97,8 @@ OS-agnostic seam with per-OS implementations behind it.
 | Requirement | Status | Notes |
 | --- | --- | --- |
 | Master volume, click to mute, unmute to prior level | Done | In the top bar. Mute ramps ~11 ms rather than cutting, so it is click-free. **Last** in the signal path since 1.2.0 — it was first, which made it an input trim |
+| AMP pedal voiced as five amplifier families, six knobs, 2× oversampled | Done | 1.4.0. Voicings, not models; a NAM capture of the real amp wins |
+| Synthesised cabinets on the IR pedal — 1x12, 2x12, 4x12, 1x10, with a MIC knob | Done | 1.4.0. The loaded file stays first and default |
 | Overdrive with a TYPE dropdown — Smooth, Screamer, Rat, Fuzz, Tube, each with its own knobs | Done | 1.3.0. The FX slot's machinery on a fixed pedal; Smooth is the original algorithm, so old presets are unchanged |
 | Split mode — a second board under the first, both heard | Done | 1.2.0. The fork beside the eye. Each board gets a LEVEL in its header at -6 dB by default, so two correlated boards sum to what one was. Saved in presets and the session as a nested block; one-board presets are unchanged |
 | Fixed-width master readout | Done | Width measured from the font, not guessed; `MUTED` no longer shifts the buttons |

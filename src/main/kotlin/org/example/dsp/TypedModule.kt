@@ -104,6 +104,13 @@ abstract class TypedModule(private val types: List<ModuleType>) : AudioProcessor
     private var shownFor = -1
     private var shown: List<Parameter> = emptyList()
 
+    /**
+     * The selected type's own notion of how many knobs to show, plus the Type dropdown itself.
+     * Read by the pedal when it rebuilds its row, so a type that hides half its controls behind the
+     * expand button — the amp voices — does so whichever type was selected when the pedal was built.
+     */
+    override val compactParameters: Int get() = 1 + instances[type.index].compactParameters
+
     /** The type actually being processed. Lags [type] by the length of a fade; see [process]. */
     private var current = 0
 

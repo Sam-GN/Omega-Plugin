@@ -89,9 +89,9 @@ omega.sh --measure  [--backend=asio] [--buffer=128] <in> <out> [secs]
 
 - `--list-backends` is the fastest answer to "why is it 200 ms on this machine".
 - `--selftest` runs the real engine through the real seam. `--chain` enables every module that runs
-  without a file on disk — everything but NAM and IR — with the EQ's five bands all active and an FX
-  slot set to Reverb, which is the heaviest thing a slot can hold, plus the rhythm section running
-  16ths at 240 BPM. It is the only way the DSP cost gets measured; without it you are testing the
+  without a file on disk — everything but NAM, with the IR pedal on a synthesised cabinet and the
+  amp on its four-stage voice — with the EQ's five bands all active and an FX slot set to Reverb,
+  which is the heaviest thing a slot can hold, plus the rhythm section running 16ths at 240 BPM. It is the only way the DSP cost gets measured; without it you are testing the
   device path alone. **Keep it in step with the shipping chain**: it drifted to four pedals once and
   spent several versions quietly measuring less than half the app. `--split` runs that chain on a
   second board as well, summed, which is the application's split mode and its worst case without a
@@ -375,7 +375,7 @@ knows nothing about devices; that is what makes it carry over unchanged to anoth
 audible dropout. Use arrays and hoist them into locals before the loop.
 
 Chain order is deliberate and is `Board.pedals`, which reads gate -> compressor -> eq -> gain ->
-overdrive -> nam -> ir -> fx1 -> delay -> reverb, then the board's own `level`, pinned. It matches
+overdrive -> amp -> nam -> ir -> fx1 -> delay -> reverb, then the board's own `level`, pinned. It matches
 conventional pedal wiring: dynamics and tone shaping ahead of the distortion, the amp capture and
 cabinet where an amp and a cabinet go, and **time-based effects last so repeats and tails are not
 fed back into the clipper**. That last clause is the one worth keeping; the user can drag the rest
@@ -465,13 +465,21 @@ choice to the plain click**. That is the tolerated failure; changing what a name
 `Session` stores the rhythm as plain strings and numbers. `preset/` is free of `dsp/` for the same
 reason it is free of `audio/`.
 
-### Adding an FX slot type, or a drive
+### Adding an FX slot type, a drive, an amp voice or a cabinet
 
-Write the `AudioProcessor` as above, then add one line to `FxSlot.TYPES` or `Overdrive.TYPES`.
-Nothing else changes — the dropdown, the preset format and the warm-up all read that list. Both
-are a `TypedModule`: one instance of every type, the selected one running, a fade across a switch,
-every type's knobs captured. The slot is positional and numbered and goes in a preset's `fx` list;
-the Overdrive has a fixed name and goes in its `modules` map, keyed by it. A preset from before the
+Write the `AudioProcessor` as above, then add one line to the `TYPES` list of `FxSlot`, `Overdrive`,
+`Amp` or `Ir`. Nothing else changes — the dropdown, the preset format and the warm-up all read that
+list. All four are a `TypedModule`: one instance of every type, the selected one running, a fade
+across a switch, every type's knobs captured, and `compactParameters` following the selected type.
+The slot is positional and numbered and goes in a preset's `fx` list; the other three have fixed
+names and go in its `modules` map, keyed by them.
+
+The amp voices and the cabinets are one class each, `AmpVoice` and `CabinetVoice`, parametrised by
+a `Spec`: a new family is a new spec, not new code. They are voicings in the style of a family —
+the amp runs at twice the device rate because clipping at the device rate aliases — and a NAM
+capture or a loaded impulse is the real thing; the dropdowns put the file first on the IR pedal for
+that reason. The IR pedal's LOAD and ✕ belong to its `Loaded IR` type; `Board.syncIrHeader` hides
+them on the cabinets. A preset from before the
 Overdrive had types carries flat `Overdrive.Drive` keys and no `modules` entry, and `Board.apply`
 puts the pedal on its first type before `applyTo` so those keys land where they always did — which
 is why **the first drive stays `Smooth`, the original algorithm, with the original knob names**.
@@ -528,6 +536,12 @@ implemented by zeroing the buffer in one step would click, so ramp it.
   | ASIO | 128 | 9.91 ms | 0.20 / 2.90 ms | clean; the comfortable recommendation |
   | WASAPI exclusive | 264 | 17.96 ms | — | clean; needs no third-party driver |
   | Java Sound | 7056 (160 ms line) | ~160-200 ms | — | the fallback tier |
+
+  **The chain grew again on 2026-10-29** — the amp voice at twice the rate, a synthesised cabinet,
+  a board LEVEL — and was measured over the virtual cable at 264 frames under `--stress`: worst
+  callback 0.28 ms, against 0.30 ms for the chain before them, so the additions are inside the
+  variation between runs. Not an ASIO-at-64 figure; the Sonicake was not attached. With `--split`
+  the two-board chain measured the same 0.28 ms.
 
   **The ASIO rows were re-measured on 2026-08-12** against the widened `--chain` above — more DSP
   than the chain that produced the previous figures, and no worse. 16 frames passed where it had
@@ -597,7 +611,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-336 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+352 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
 it runs on Windows too. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under

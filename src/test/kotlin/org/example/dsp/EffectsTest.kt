@@ -737,6 +737,271 @@ class IrTest {
     }
 }
 
+class CabinetTest {
+
+    private fun cabinets(): List<CabinetVoice> = listOf(
+        CabinetVoice(CabinetVoice.OPEN_1X12),
+        CabinetVoice(CabinetVoice.OPEN_2X12),
+        CabinetVoice(CabinetVoice.CLOSED_4X12),
+        CabinetVoice(CabinetVoice.SMALL_1X10),
+    )
+
+    /** Steady-state level of a tone through a cabinet, measured after the filters have settled. */
+    private fun levelAt(cabinet: CabinetVoice, hz: Float, rate: Float = DEFAULT_SAMPLE_RATE): Float {
+        cabinet.prepare(rate, 256)
+        cabinet.reset()
+        val n = (rate * 0.2f).toInt()
+        val buffer = FloatArray(n) { sin(2.0 * Math.PI * hz * it / rate).toFloat() * 0.3f }
+        cabinet.process(buffer, n)
+        return (n / 2 until n).maxOf { abs(buffer[it]) }
+    }
+
+    @Test
+    fun `the IR pedal offers the loaded file first and four cabinets`() {
+        assertEquals(listOf("Loaded IR", "1x12 Open", "2x12 Open", "4x12 Closed", "1x10 Small"), Ir.typeNames)
+        val ir = Ir()
+        assertTrue(ir.usesFile, "a fresh IR pedal is on the file, as it always was")
+        assertEquals(listOf("Type", "Mix", "Level"), ir.parameters.map { it.name })
+        ir.selectType("4x12 Closed")
+        assertTrue(!ir.usesFile)
+        assertEquals(listOf("Type", "Mic", "Level"), ir.parameters.map { it.name })
+    }
+
+    @Test
+    fun `a file loaded while on a cabinet is still there on switching back`() {
+        val ir = Ir()
+        ir.selectType("1x12 Open")
+        ir.loadImpulse(floatArrayOf(1f), DEFAULT_SAMPLE_RATE, "unit")
+        assertEquals("unit", ir.impulseName)
+        ir.selectType("Loaded IR")
+        assertEquals("unit", ir.impulseName)
+    }
+
+    @Test
+    fun `the mic knob reads as words at its ends and a percentage between`() {
+        val mic = CabinetVoice(CabinetVoice.OPEN_1X12).mic
+        mic.value = 0f
+        assertEquals("OFF-AXIS", mic.formatted())
+        mic.value = 1f
+        assertEquals("ON-AXIS", mic.formatted())
+        mic.value = 0.5f
+        assertEquals("50 %", mic.formatted())
+    }
+
+    @Test
+    fun `every cabinet is silent on silence and finite at full scale`() {
+        for (cabinet in cabinets()) {
+            cabinet.reset()
+            val quiet = FloatArray(1024)
+            cabinet.process(quiet, quiet.size)
+            assertTrue(quiet.all { it == 0f }, "${cabinet.name} made something of nothing")
+            cabinet.level.value = 24f
+            cabinet.reset()
+            val loud = FloatArray(4096) { if ((it / 40) % 2 == 0) 1f else -1f }
+            cabinet.process(loud, loud.size)
+            assertTrue(loud.all { it.isFinite() }, "${cabinet.name} blew up")
+        }
+    }
+
+    @Test
+    fun `every cabinet rolls the top off hard, which is the thing a cabinet does`() {
+        for (cabinet in cabinets()) {
+            val mids = levelAt(cabinet, 1000f)
+            val top = levelAt(cabinet, 10_000f)
+            // At least 20 dB down at 10 kHz against 1 kHz; a real one is further.
+            assertTrue(top < mids * 0.1f, "${cabinet.name}: 10 kHz at $top against 1 kHz at $mids")
+        }
+    }
+
+    @Test
+    fun `the closed 4x12 is darker than the open 1x12`() {
+        val combo = CabinetVoice(CabinetVoice.OPEN_1X12)
+        val stack = CabinetVoice(CabinetVoice.CLOSED_4X12)
+        assertTrue(levelAt(stack, 5000f) < levelAt(combo, 5000f), "a stack should have less at 5 kHz")
+        assertTrue(levelAt(stack, 120f) > levelAt(combo, 120f), "and more thump")
+    }
+
+    @Test
+    fun `on-axis is brighter than off-axis`() {
+        val cabinet = CabinetVoice(CabinetVoice.OPEN_2X12)
+        cabinet.mic.value = 0f
+        val offAxis = levelAt(cabinet, 3000f)
+        cabinet.mic.value = 1f
+        val onAxis = levelAt(cabinet, 3000f)
+        assertTrue(onAxis > offAxis * 1.2f, "on-axis $onAxis should be well above off-axis $offAxis")
+    }
+
+    @Test
+    fun `a cabinet's curve means the same frequencies at any rate`() {
+        // The guard against the hardcoded-44100 bug, as every filter here has: the roll-off at
+        // 96 kHz must sit where it sits at 44.1, so the same tone comes out at the same level.
+        val cabinet = CabinetVoice(CabinetVoice.CLOSED_4X12)
+        val at44 = levelAt(cabinet, 4000f, 44_100f)
+        val at96 = levelAt(cabinet, 4000f, 96_000f)
+        assertEquals(at44, at96, at44 * 0.1f, "4 kHz through a 4x12 at 44.1 vs 96 kHz")
+    }
+}
+
+class AmpTest {
+
+    private fun voices(): List<AmpVoice> = listOf(
+        AmpVoice(AmpVoice.AMERICAN_CLEAN),
+        AmpVoice(AmpVoice.TWEED),
+        AmpVoice(AmpVoice.BRITISH_CRUNCH),
+        AmpVoice(AmpVoice.BRITISH_CHIME),
+        AmpVoice(AmpVoice.MODERN_HIGH_GAIN),
+    )
+
+    private fun tone(hz: Float, amplitude: Float, seconds: Float, rate: Float = DEFAULT_SAMPLE_RATE) =
+        FloatArray((rate * seconds).toInt()) { sin(2.0 * Math.PI * hz * it / rate).toFloat() * amplitude }
+
+    @Test
+    fun `the amp offers five families, four knobs on the pedal and two behind the button`() {
+        assertEquals(
+            listOf("American Clean", "Tweed", "British Crunch", "British Chime", "Modern High Gain"),
+            Amp.typeNames,
+        )
+        val amp = Amp()
+        assertEquals(listOf("Type", "Gain", "Bass", "Mid", "Treble", "Presence", "Master"), amp.parameters.map { it.name })
+        assertEquals(5, amp.compactParameters, "Type plus four on the pedal; Presence and Master expand")
+        amp.selectType("British Chime")
+        assertEquals("Cut", amp.parameters[5].name, "the chime family has a cut control, not presence")
+        assertEquals(5, amp.alternates.size)
+    }
+
+    @Test
+    fun `every voice stays inside full scale at its loudest, at both rates`() {
+        for (rate in listOf(44_100f, 96_000f)) {
+            for (voice in voices()) {
+                voice.prepare(rate, 256)
+                for (parameter in voice.parameters) parameter.value = parameter.max
+                voice.reset()
+                val square = FloatArray(8192) { if ((it / 50) % 2 == 0) 1f else -1f }
+                voice.process(square, square.size)
+                val sine = tone(220f, 1f, 0.2f, rate)
+                voice.process(sine, sine.size)
+                for (buffer in listOf(square, sine)) {
+                    assertTrue(buffer.all { it.isFinite() }, "${voice.name} produced a non-finite sample at $rate")
+                    val peak = buffer.maxOf { abs(it) }
+                    assertTrue(peak <= 1.01f, "${voice.name} reached $peak at $rate Hz")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `every voice is silent on silence, despite the biased stages`() {
+        for (voice in voices()) {
+            for (parameter in voice.parameters) parameter.value = parameter.max
+            voice.reset()
+            val buffer = FloatArray(4096)
+            voice.process(buffer, buffer.size)
+            for ((i, v) in buffer.withIndex()) assertEquals(0f, v, 1e-6f, "${voice.name} sample $i")
+        }
+    }
+
+    /**
+     * Total harmonic distortion of a sine through the voice: the share of the output's power that
+     * is not at the fundamental. Measured with a tone whose period divides the window exactly —
+     * 220.5 Hz is 200 samples at 44.1 kHz, and 4000 samples is twenty cycles — so the fundamental's
+     * bin is leakage-free and the filters' phase shifts, which a waveform comparison would count as
+     * distortion, do not register.
+     */
+    private fun distortion(voice: AmpVoice, gainKnob: Float): Double {
+        voice.gain.value = gainKnob
+        voice.reset()
+        val rate = DEFAULT_SAMPLE_RATE
+        val hz = 220.5f
+        val output = tone(hz, 0.3f, 0.5f)
+        voice.process(output, output.size)
+        val n = 4000
+        val from = output.size - n
+        var re = 0.0
+        var im = 0.0
+        var power = 0.0
+        for (i in 0 until n) {
+            val x = output[from + i].toDouble()
+            val angle = 2.0 * Math.PI * hz * i / rate
+            re += x * kotlin.math.cos(angle)
+            im += x * kotlin.math.sin(angle)
+            power += x * x
+        }
+        val amplitude = 2.0 * kotlin.math.sqrt(re * re + im * im) / n
+        val fundamental = amplitude * amplitude / 2.0
+        val total = power / n
+        return kotlin.math.sqrt((1.0 - fundamental / total).coerceAtLeast(0.0))
+    }
+
+    @Test
+    fun `more gain is more distortion, on every voice`() {
+        for (voice in voices()) {
+            val clean = distortion(voice, 1f)
+            val driven = distortion(voice, 9f)
+            assertTrue(driven > clean, "${voice.name}: gain 9 gave $driven against gain 1 at $clean")
+        }
+    }
+
+    @Test
+    fun `the clean voice stays cleaner than the high-gain one at the same knob`() {
+        val clean = distortion(AmpVoice(AmpVoice.AMERICAN_CLEAN), 5f)
+        val modern = distortion(AmpVoice(AmpVoice.MODERN_HIGH_GAIN), 5f)
+        assertTrue(modern > clean * 2, "high gain $modern should be well past clean $clean at noon")
+    }
+
+    @Test
+    fun `the tone stack moves the frequencies it says it moves`() {
+        fun level(voice: AmpVoice, hz: Float): Float {
+            voice.reset()
+            val buffer = tone(hz, 0.05f, 0.2f)
+            voice.process(buffer, buffer.size)
+            return (buffer.size / 2 until buffer.size).maxOf { abs(buffer[it]) }
+        }
+        val voice = AmpVoice(AmpVoice.AMERICAN_CLEAN)
+        voice.gain.value = 1f
+        voice.bass.value = 10f
+        val bassUp = level(voice, 80f)
+        voice.bass.value = 0f
+        val bassDown = level(voice, 80f)
+        assertTrue(bassUp > bassDown * 2f, "bass 10 vs 0 at 80 Hz: $bassUp vs $bassDown")
+
+        voice.bass.value = 5f
+        voice.treble.value = 10f
+        val trebleUp = level(voice, 4000f)
+        voice.treble.value = 0f
+        val trebleDown = level(voice, 4000f)
+        assertTrue(trebleUp > trebleDown * 2f, "treble 10 vs 0 at 4 kHz: $trebleUp vs $trebleDown")
+    }
+
+    @Test
+    fun `a pushed tweed sags - the level drops after the attack and holds lower`() {
+        val voice = AmpVoice(AmpVoice.TWEED)
+        voice.gain.value = 8f
+        voice.master.value = 10f
+        voice.reset()
+        val buffer = tone(220f, 0.8f, 0.5f)
+        voice.process(buffer, buffer.size)
+        val rate = DEFAULT_SAMPLE_RATE.toInt()
+        // The first few milliseconds, before the supply has dropped, against the sustained level.
+        val attack = (0 until rate / 100).maxOf { abs(buffer[it]) }
+        val sustain = (rate * 4 / 10 until buffer.size).maxOf { abs(buffer[it]) }
+        assertTrue(sustain < attack * 0.97f, "no sag: attack $attack, sustain $sustain")
+    }
+
+    @Test
+    fun `the chime family's cut darkens as it is turned up`() {
+        fun top(cut: Float): Float {
+            val voice = AmpVoice(AmpVoice.BRITISH_CHIME)
+            voice.gain.value = 1f
+            voice.presence.value = cut
+            voice.reset()
+            val buffer = tone(6000f, 0.05f, 0.2f)
+            voice.process(buffer, buffer.size)
+            return (buffer.size / 2 until buffer.size).maxOf { abs(buffer[it]) }
+        }
+        assertTrue(top(0f) > top(10f) * 2f, "cut 0 at ${top(0f)} should be far brighter than cut 10 at ${top(10f)}")
+    }
+}
+
 class EffectChainTest {
 
     @Test

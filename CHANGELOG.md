@@ -9,6 +9,78 @@ unverified, it says so.
 
 ---
 
+## [1.4.1-beta] — 2026-10-29
+
+### Fixed — a dropdown's width no longer follows the word on it
+
+Every TYPE dropdown — on the FX slots, the Overdrive, the Amp and the IR — is now sized for its
+longest option from the start, so picking a shorter one does not narrow the button, the pedal and
+then the wrap of the whole board. A pedal may still change width because its knobs changed, or
+because LOAD appeared on the IR's loaded-file type; it no longer changes because a word did.
+
+---
+
+## [1.4.0-beta] — 2026-10-29
+
+### Added — an AMP pedal, voiced as five amplifier families
+
+A new pedal between the overdrive and the capture, with a TYPE dropdown like the Overdrive's:
+`American Clean`, `Tweed`, `British Crunch`, `British Chime` and `Modern High Gain`. Six knobs —
+Gain, Bass, Mid, Treble, Presence (Cut on the chime family) and Master — of which the pedal shows
+four, with the EQ's expand button for the other two. It arrives switched off on every existing
+preset, since none of them mention it.
+
+**These are voicings, not models.** A component-level model of one amplifier takes years and a
+neural capture of one is what the NAM pedal loads; a capture of the real thing wins, every time.
+What a voice has is the stages an amp has, with a family's gain structure and tone curve, so it
+sounds like a blackface clean or a plexi crunch rather than like any particular one of them. It is
+for having an amp when there is no capture, and for the ten-second switch between families.
+
+- **Preamp**: two to four cascaded biased soft-clip stages, each with a coupling high-pass and a
+  gentle low-pass after it. Two stages into each other behave nothing like one at twice the gain.
+- **Tone stack**: a low shelf, a mid peak and a high shelf at the family's frequencies, with the
+  family's *mid at noon* — scooped on the American stacks and the modern one, full on the plexi —
+  which is the thing a player recognises first.
+- **Power amp with sag**: an envelope follower drops the gain after a loud transient and lets it
+  back over a couple of hundred milliseconds. The tweed sags most; the test asserts it does.
+- **Two-times oversampling** around the whole path. Clipping at the device rate aliases, and
+  aliasing is the fizz that makes cheap amp simulations sound cheap.
+- Tested at every knob's loudest with a square and a sine at 44.1 and 96 kHz to stay inside full
+  scale, silent on silence despite the biased stages, more distorted with more gain on every voice,
+  cleaner on the clean voice than the high-gain one at the same knob, and the tone stack moving
+  the frequencies it names.
+
+### Added — synthesised cabinets on the IR pedal
+
+The IR pedal has the same dropdown. `Loaded IR` is first and the default — it is the file, as
+before, and the better cabinet. After it, `1x12 Open`, `2x12 Open`, `4x12 Closed` and `1x10 Small`:
+the broad shape of a speaker in a box as five filters — a steep cut below the cone's resonance, a
+low-mid bump for the box, a presence peak, and a 24 dB-per-octave roll-off above a few kilohertz,
+which is the single biggest thing a cabinet does. They need no file, which is every first run, and
+an amp voice without one sounds like a wasp.
+
+- A synthesised cabinet has a MIC knob, from OFF-AXIS to ON-AXIS, that tilts the roll-off and scales
+  the presence peak, and a Level. The readout says the words at the ends and a percentage between.
+- LOAD and its ✕ belong to `Loaded IR` and hide on the other types. A file loaded before switching
+  to a cabinet is still there on switching back.
+- Old presets name no type and carry their file, so they land on `Loaded IR` with it, unchanged.
+- Tested: every cabinet silent on silence, at least 20 dB down at 10 kHz against 1 kHz, the 4x12
+  darker and thumpier than the 1x12, on-axis brighter than off-axis, and the same curve at 96 kHz
+  as at 44.1.
+
+### Changed
+
+- `--selftest --chain` now carries the amp on `Modern High Gain` and the IR pedal on `4x12 Closed`:
+  the heaviest the shipping chain can be without a file, which the figures in CLAUDE.md are owed
+  against. Measured on this machine over the virtual cable at 264 frames with `--stress`: worst
+  callback 0.28 ms with the amp and cabinet in the chain, against 0.30 ms without them in the
+  1.2.0 measurement — the addition is below the variation between runs at that buffer. The
+  oversampled amp is a few dozen operations a sample; it was never going to be the expensive part.
+- A `Parameter` can name its two ends, which is how MIC reads.
+- Sixteen new tests, 352 in all.
+
+---
+
 ## [1.3.0-beta] — 2026-10-29
 
 ### Added — the Overdrive is five drives, from a dropdown

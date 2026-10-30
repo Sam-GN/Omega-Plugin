@@ -24,6 +24,58 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
+ * The cabinet pedal: a loaded impulse response, or one of a few synthesised cabinets, from a
+ * dropdown.
+ *
+ * The loaded file is first and the default, because it is the better cabinet — a real impulse
+ * carries the comb-filter detail of a microphone in front of a cone in a room, and a parametric
+ * cabinet has the broad shape and none of that. The synthesised ones are for having a cabinet when
+ * there is no file on disk, which is every first run, and an amp without a cabinet sounds like a
+ * wasp. See [CabinetVoice] for what they are.
+ *
+ * The file-loading surface — [loadImpulse], [clearImpulse], [impulseName] — stays on this class and
+ * reaches the loaded type whichever type is selected, so a file loaded before switching to a 4x12 is
+ * still there on switching back. LOAD and its ✕ on the header belong to the loaded type alone; the
+ * window hides them for the others.
+ */
+class Ir : TypedModule(TYPES) {
+
+    override val name = "IR"
+
+    private val loaded = instance(0) as LoadedIr
+
+    /** True while the dropdown is on the loaded file, which is when LOAD means anything. */
+    val usesFile: Boolean get() = type.index == 0
+
+    val mix: Parameter get() = loaded.mix
+    val level: Parameter get() = loaded.level
+
+    /** Name of the loaded impulse, for the UI. Null when there is none. */
+    val impulseName: String? get() = loaded.impulseName
+
+    /** Replaces the impulse. Call off the audio thread. */
+    fun loadImpulse(samples: FloatArray, rate: Float, name: String) = loaded.loadImpulse(samples, rate, name)
+
+    fun clearImpulse() = loaded.clearImpulse()
+
+    companion object {
+        /** 46 ms at 44.1 kHz — past this an impulse is room, and the reverb does rooms. */
+        const val MAX_TAPS = LoadedIr.MAX_TAPS
+
+        /** The loaded file first, then the cabinets. **Append only** — see [TypedModule]. */
+        private val TYPES = listOf(
+            ModuleType("Loaded IR") { LoadedIr() },
+            ModuleType("1x12 Open") { CabinetVoice(CabinetVoice.OPEN_1X12) },
+            ModuleType("2x12 Open") { CabinetVoice(CabinetVoice.OPEN_2X12) },
+            ModuleType("4x12 Closed") { CabinetVoice(CabinetVoice.CLOSED_4X12) },
+            ModuleType("1x10 Small") { CabinetVoice(CabinetVoice.SMALL_1X10) },
+        )
+
+        val typeNames: List<String> get() = TYPES.map { it.label }
+    }
+}
+
+/**
  * Impulse response convolution — a speaker cabinet, in practice.
  *
  * Direct convolution rather than partitioned FFT. At the cap of [MAX_TAPS] that is 2048 multiply-adds
@@ -39,12 +91,12 @@ import kotlin.math.sqrt
  * and then published as one object through a volatile field: the audio thread reads that reference
  * once per block and works from it, so it can never see a new impulse against an old history.
  */
-class Ir : AudioProcessor {
+class LoadedIr : AudioProcessor {
 
-    override val name = "IR"
+    override val name = "Loaded IR"
 
     @Volatile
-    override var enabled = false
+    override var enabled = true
 
     val mix = Parameter("Mix", 0f, 1f, 1f)
     val level = Parameter("Level", -24f, 24f, 0f, "dB")

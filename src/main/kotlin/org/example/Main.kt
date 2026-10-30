@@ -679,6 +679,10 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
         },
         org.example.dsp.Gain(),
         org.example.dsp.Overdrive(),
+        // The amp at its most expensive voice — four cascaded stages at twice the rate — and the
+        // cabinet pedal on a synthesised cabinet, which is the one way it runs without a file.
+        org.example.dsp.Amp().apply { selectType("Modern High Gain") },
+        org.example.dsp.Ir().apply { selectType("4x12 Closed") },
         org.example.dsp.FxSlot().apply { selectType("Reverb") },
         org.example.dsp.Delay(),
         org.example.dsp.Reverb(),
