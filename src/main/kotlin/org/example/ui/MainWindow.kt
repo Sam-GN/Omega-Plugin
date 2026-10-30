@@ -1395,7 +1395,8 @@ class MainWindow : JFrame("Omega-Plugin") {
     }
 
     private fun loggingNote(on: Boolean): String =
-        if (on) "Writing to logs\\omega.txt in the settings folder."
+        // The platform's separator: `logs\omega.txt` is right on Windows and wrong on Linux.
+        if (on) "Writing to logs${java.io.File.separator}omega.txt in the settings folder."
         else "Off. Turn on to record a file for troubleshooting."
 
     /**
@@ -2431,7 +2432,9 @@ class MainWindow : JFrame("Omega-Plugin") {
         // A backend may find that an endpoint has no usable size at all — an HDMI output whose
         // driver rounds every buffer it is given, for instance. An empty picker plus a disabled
         // Start is the truthful outcome; offering a size that is certain to break up is not.
-        unusableDevice = if (caps.bufferSizes.isEmpty()) {
+        unusableDevice = if (caps.unusableReason != null) {
+            caps.unusableReason
+        } else if (caps.bufferSizes.isEmpty()) {
             "${device.name} will not run in exclusive mode at ${SampleRates.format(displayRate)}. " +
                 "Its driver does not honour any buffer size offered. Use a different device, or ASIO."
         } else {
@@ -2578,6 +2581,21 @@ class MainWindow : JFrame("Omega-Plugin") {
                 "Running — ${input.name} to ${output.name} at ${SampleRates.format(displayRate)}",
                 Theme.GOOD,
             )
+            // Linux only in practice: Windows backends report nothing here. A thread that did not
+            // get realtime priority crackles under load for a reason the user cannot see, and the
+            // fix is an account setting — so say it now, while they are looking, not after.
+            engine.schedulingNote?.let { note ->
+                if (note.startsWith("realtime:")) {
+                    Log.info("audio", "Scheduling: $note.")
+                } else {
+                    Log.warn("audio", "Scheduling: $note")
+                    setStatus(
+                        "Running, but the audio thread is not realtime and may crackle. " +
+                            "Run with --list-backends for the fix.",
+                        Theme.BAD,
+                    )
+                }
+            }
         }
     }
 

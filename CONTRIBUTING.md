@@ -4,7 +4,8 @@ The long version of everything here is `CLAUDE.md` at the root — it is written
 editing the code next, and it explains *why* each of these rules exists rather than just stating it.
 This file is the short list of the ones that will get a patch turned down.
 
-Status: **beta, Windows only, one developer, one audio interface.** Nothing about it is settled
+Status: **beta, Windows and Linux, one developer, one audio interface.** A change has to keep
+working on both: CI builds and tests each, and a backend is only ever loaded on its own OS. Nothing about it is settled
 except the licence.
 
 ## Licence
@@ -88,7 +89,7 @@ than making one slow, so `deadlineMisses` reads zero straight through audible dr
 | | |
 | --- | --- |
 | `known-issues.md` | Defects in code that **already ships**. Nothing speculative. |
-| `linux-compat.md` | A **work plan** for the Linux port. Numbered, and unbuilt. |
+| `linux-compat.md` | The **work plan** for the Linux port. Numbered; each item says whether it is done. |
 | `low-latency-backend.md`, `virtual-io.md`, `WhatsDone.md` | History and reference. |
 | `theme-optional.md`, `profile-optional.md`, `pickup-optional.md` | **Proposals nobody has promised.** Not a backlog. |
 

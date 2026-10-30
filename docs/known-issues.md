@@ -68,24 +68,24 @@ here is a good estimate presented as a fact.
 
 ---
 
-## 5. Nothing has ever run on Linux, and the degradation path is unexercised
+## 5. Linux ships with one laptop's worth of evidence
 
-**Affects:** everything. **Status:** known and accepted scope, listed for honesty.
+**Affects:** 1.1.0-beta onward, every Linux backend. **Status:** known scope, listed for honesty.
 
-The seam is shaped for it — `Pairing`, `DeviceCapabilities.fixedSampleRate` and
-`StreamEvents.onFormatChanged` all exist because of JACK and ALSA — but no part of this program has
-been run on Linux.
+Linux runs since 1.1.0 — JACK, ALSA and Java Sound, packaged as an AppImage — but everything known
+about it came from one Manjaro laptop's built-in HDA card. Specifically:
 
-Separately, CLAUDE.md specifies that the fallback ladder is tested by deliberately breaking it:
-running with JNA off the classpath and confirming the app starts, streams on Java Sound and explains
-itself. `WhatsDone.md` records that as done — app starts, explains itself, streams — but **not
-against which version**, and a great deal has changed under the seam since. **A degradation path
-that has never been exercised is one that does not work**, and one exercised at an unknown point in
-the past is only slightly better; the next run of it should be dated here.
+- **No guitar interface has been tried on Linux.** The 10–12 ms question is unanswered there.
+- **JACK has only met a jackd running the dummy driver**, without realtime priority. It has never
+  been run through PipeWire's JACK library, which is how most users will reach it.
+- **ALSA direct fails at 128 and 64 frames on that card**, and so does ALSA's own `alsaloop` on the
+  same pair of devices, so the limit is believed to be the hardware's. 256 frames runs clean.
+- **The window has been started, not looked at** — not at the Steam Deck's 1280×800, not under
+  fractional scaling, and the file dialogs have not been opened. See `linux-compat.md` F7 and F8.
 
-`linux-compat.md` works through what would and would not survive the move, subsystem by subsystem,
-and identifies the one experiment that can be run on Windows today: the JNA-off-the-classpath test
-above validates everything except the genuinely Linux-specific unknowns.
+The degradation path was exercised on Linux against 1.1.0-beta (JNA off the classpath: Java Sound
+streams, both native backends explain themselves). It found and fixed a crash in `--list-backends`;
+the next run of it should be dated here too.
 
 ---
 

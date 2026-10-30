@@ -146,6 +146,25 @@ private fun listBackends() {
     }
     println()
     println(collectorWarning() ?: "Collector: generational ZGC. Good.")
+    // Linux only: whether a thread of ours can have realtime priority is a per-account setting, and
+    // the one most likely to be the answer to "it crackles". JACK's thread is the server's and is
+    // not covered by this; ALSA's is.
+    if (org.example.audio.linux.LinuxPlatform.isLinux) {
+        // Throwable: without JNA the probe's class cannot load, and the listing above already says
+        // why. The diagnostic must survive the very failure it is there to describe.
+        val grant = try {
+            org.example.audio.linux.LinuxRt.probe()
+        } catch (t: Throwable) {
+            null
+        }
+        println(
+            when {
+                grant == null -> "Realtime: could not be checked — JNA did not load."
+                grant.realtime -> "Realtime: ${grant.detail}. Good."
+                else -> "Realtime: ${grant.detail}"
+            }
+        )
+    }
 }
 
 /** A benchmark layer array: uniform activation, no gating, no 1x1 on the head path. */
@@ -783,6 +802,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     // Read at the end, not at the start: on a two-clock backend the adapter's own contribution is
     // the playback queue, which has not settled yet one block after start().
     val finalFormat = engine.format
+    val scheduling = engine.schedulingNote
     stressing.set(false)
     engine.stop()
 
@@ -799,6 +819,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     println(String.format("deadline misses : %d (%.2f/s) — callbacks that overran their own period", misses, misses / elapsed))
     println(String.format("device xruns    : %d (%.2f/s)", xruns, xruns / elapsed))
     println(String.format("worst callback  : %.2f ms against a %.2f ms period", worst, frames * 1000f / rate))
+    scheduling?.let { println("scheduling      : $it") }
     fault?.let { println("DSP fault       : $it") }
 
     if (probe != null) {

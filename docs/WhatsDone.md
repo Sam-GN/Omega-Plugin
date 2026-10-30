@@ -16,7 +16,7 @@ Companion to `low-latency-backend.md`, which is the architecture design.
 | 2 | Output is an executable program | Done | `build/libs/OmegaPlugin-<version>-all.jar` — **now needs Java 21+**, see §7 |
 | 3 | GUI program (not a library) | Done | Swing, custom-painted |
 | 4 | GUI to select input and output channels | Done | Device bar, with backend/rate/buffer pickers |
-| 5 | Access to audio devices on Windows **and Linux** | Windows done, **Linux never run** — see §7 |
+| 5 | Access to audio devices on Windows **and Linux** | Done — Linux since 1.1.0-beta (JACK, ALSA), on one laptop so far; see §7 |
 | 6 | Switches to turn effects on and off | Done | `ToggleSwitch` per pedal |
 | 7 | A knob to adjust granularity | Done | `Knob` — drag, shift for fine, wheel, double-click to reset |
 | 8 | Effects: gain, delay, reverb, overdrive | Done | `dsp/Gain.kt`, `Delay.kt`, `Reverb.kt`, `Overdrive.kt` |
@@ -26,8 +26,9 @@ Companion to `low-latency-backend.md`, which is the architecture design.
 | + | Beyond the original scope: recording to WAV | Done | `audio/Recorder.kt` — 32-bit float mono, pre-clamp, opens in Audacity |
 | + | Beyond the original scope: the session is restored on launch | Done | `preset/Session.kt` in `config/config.json` |
 
-Linux was expected to be the hard part and it remains open. Device enumeration, the headless
-diagnostics and the backend seam were all built with it in mind, but nothing has ever executed there.
+Linux was expected to be the hard part. It landed in 1.1.0-beta behind the same seam, touching
+nothing in `dsp/` — JACK, ALSA, realtime through rtkit, and an AppImage — and has so far run on one
+laptop's built-in card; no guitar interface has been tried there. See `linux-compat.md` §0.
 
 ---
 
@@ -84,7 +85,8 @@ OS-agnostic seam with per-OS implementations behind it.
 | WASAPI **shared** backend (device stays sharable) | Done — `audio/wasapi/WasapiSharedBackend.kt`, 65.99 ms |
 | Java Sound backend (always-available bottom tier) | Done — `audio/javasound/` |
 | Automatic fallback with the reason surfaced | Done — verified by removing JNA from the classpath; app starts, explains, streams |
-| Linux backend (ALSA/JACK) | **Not built.** Seam is OS-agnostic; a Linux backend touches nothing in `dsp/` or `ui/` |
+| Linux backends (JACK, ALSA) | Done in 1.1.0-beta — `audio/jack/`, `audio/alsa/`, realtime in `audio/linux/`. Nothing in `dsp/` changed |
+| Fallback ladder re-verified on Linux | Done 2026-10-29 against 1.1.0-beta, JNA off the classpath — found and fixed a `--list-backends` crash |
 
 `dsp/` is **byte-identical** to before the backend work. That was the design goal and it held.
 
@@ -171,7 +173,7 @@ Ordered by how much they matter.
 
 1. **No true cable-to-cable latency measurement.** All figures are the driver's own claim. Patch a
    lead from the Sonicake's output to its input and run `--measure`.
-2. **Linux has never been run.** Not once, not even `--list-devices`.
+2. **Linux has run on one laptop only.** No guitar interface, and JACK only against a dummy jackd. See `known-issues.md` §5.
 3. **No installer.** The jar needs Java 21+ and cannot be given ZGC flags through a manifest, so
    `java -jar` runs without the collector the app needs. That half is closed twice over: `omega.bat`
    and `omega.sh` are written beside the fat jar carrying the right flags, and `exeZip` now produces

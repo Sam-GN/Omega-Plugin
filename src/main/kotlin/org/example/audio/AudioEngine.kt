@@ -146,6 +146,9 @@ class AudioEngine(
      */
     val realtimeRatio: Float get() = stream?.realtimeRatio ?: 1f
 
+    /** See [AudioStream.schedulingNote]. Null on Windows, where there is nothing new to say. */
+    val schedulingNote: String? get() = stream?.schedulingNote
+
     val backendId: BackendId? get() = backend?.id
 
     /**

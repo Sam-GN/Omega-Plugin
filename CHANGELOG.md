@@ -9,6 +9,113 @@ unverified, it says so.
 
 ---
 
+## [1.1.0-beta] — 2026-10-29
+
+### Added — Linux, as an AppImage
+
+The program runs on Linux now, natively. The first version that does, so the minor number moves.
+Every figure below was measured on one machine: a Manjaro laptop under KDE on Wayland, PipeWire
+1.6.9, an HDA Intel PCH card with no HDMI display attached. It is not the guitar interface the
+Windows figures were taken on, which matters for the 64-frame result further down.
+
+**Two new backends**, both through JNA as ASIO and WASAPI are, and with no native build step:
+
+- **JACK** (`audio/jack/`). Linux's equivalent of ASIO: one clock, a callback on the server's
+  realtime thread, no adapter latency. It also reaches PipeWire, through PipeWire's JACK library.
+  Each client that owns hardware ports is listed as a device, so under PipeWire every sound card
+  appears separately and input and output can be picked independently. The server owns the rate,
+  which is shown read-only. Choosing a buffer asks the server to resize; whatever it grants is
+  mirrored back, and the original size is put back on close. The client connects only the ports the
+  user chose. If a PipeWire server is running, its JACK library is tried by explicit path before the
+  system `libjack.so.0`. That covers Debian and Ubuntu, which ship it off the library path, and
+  machines that also have jack2 installed with no server running — this one is both.
+- **ALSA** (`audio/alsa/`), the fallback that is always present, because every distribution's sound
+  server sits on `libasound`. `Default` goes through the sound server: PipeWire or PulseAudio, while
+  other programs keep their sound. Each `hw:` device goes straight to the card. Capture and playback
+  are listed separately, because they are separate PCMs with separate capabilities. A card held by
+  the sound server says so in the picker instead of failing at Start.
+  The thread is ours, so it is made realtime: `SCHED_FIFO` directly if the account allows it,
+  otherwise through rtkit over D-Bus, which most desktops grant without any setup. This account
+  has `rtprio` 0 and rtkit granted priority 20.
+
+The ladder on Linux is JACK, then ALSA, then Java Sound.
+
+Measured with `--selftest --chain --stress`, 20 s:
+
+| Path | Buffer | Result |
+| --- | ---: | --- |
+| ALSA, analog in → HDMI out, both direct | 256 @ 48 kHz | **clean**: ratio 0.9998, 0 xruns, worst 0.28 ms of 5.33 |
+| ALSA, PipeWire `Default` in → HDMI out | 256 @ 48 kHz | clean |
+| ALSA, direct | 128 and 64 | **fails** on this card — see below |
+| JACK, jackd dummy driver | 128 (server's own) | clean |
+| JACK, jackd dummy driver, resized by the client | 64 | 0.4 xruns/s; the dummy server had no realtime priority |
+
+The failures at 128 and 64 frames belong to this card, not the backend. ALSA's own C tool
+`alsaloop`, given the same pair of devices, logged 222 xruns at 5.3 ms of latency, 2 122 at 2.7 ms
+and 91 at 1.3 ms. Omega runs that pair clean at 5.3 ms. **No guitar interface has been tested on
+Linux yet**, and the low-latency verdict waits on one.
+
+**A bug found and fixed on the way.** The first ALSA loop read whatever input was available.
+After a partial read it then waited for a whole further period, because a wait wakes only once
+`avail_min` (one period) is available. It fell a little further behind the card on every cycle
+until playback ran dry: an xrun every third period at 256 frames. It now waits until the full
+remainder is there before reading.
+
+**Packaging.** `./gradlew appImage` builds `Omega-Plugin-<version>-Linux.AppImage`: one file, a
+trimmed Java 21 inside it, and nothing to install. That includes SteamOS and Bazzite, where a
+`.deb` or `.rpm` cannot be installed. `AppRun` uses the bundled runtime and never a `java` from
+PATH, with the same JVM flags as the Windows launcher. The image carries a `.desktop` entry and an
+icon, plus a notice naming the bundled runtime's exact build and where its source is. The bundled
+runtime was run with an empty environment: it found its own Java, loaded JNA, ALSA and rtkit, and
+ran generational ZGC. The GUI opened under KDE Wayland and ran without an exception. Only its
+log output was checked; nobody has looked at the window yet.
+
+### Changed — the release is two files
+
+`release.yml` now has a `version` job, then `windows` and `linux` packaging jobs in parallel, then
+`publish`, which attaches both files to one draft release. If either platform fails, nothing is
+published. The Linux job runs on **ubuntu-22.04**: an AppImage runs against the host's glibc, so it
+has to be built on the oldest system it promises to run on. `appimagetool` is pinned to 1.9.1 by
+URL and by SHA-256, because it is an executable fetched and run with the release token in scope.
+
+`build.yml`'s Linux leg moved to ubuntu-22.04 too. It now also packs the AppImage, runs
+`--list-backends` from it and checks for generational ZGC, so a packaging break fails the pull
+request instead of the release. The AppImage is kept as a build artifact for 14 days.
+
+### Changed — the registry loads only this platform's backends
+
+`Backends.OPTIONAL` pairs each class with its OS, and a backend is loaded only on that OS. Before,
+a Linux user would have seen ASIO and both WASAPIs as "unavailable", entries they could never have.
+**On Windows the list is exactly what it was**: the JACK and ALSA classes now exist, but they are
+never loaded there. `BackendSeamTest` pins both directions and runs on both CI legs.
+
+### Fixed — the degradation path, exercised and dated
+
+The JNA-off-the-classpath test from `CLAUDE.md` was run against this version, on Linux. Java Sound
+streamed and passed, and both native backends gave a reason for being unavailable. It also found
+a fault. The Linux OS check lived in the same class as the JNA declarations, so the check meant to
+keep a backend away from native code was itself what loaded it. `--list-backends` then died on an
+uncaught `NoClassDefFoundError` after printing everything else. The check now lives in its own
+JNA-free object (`LinuxPlatform`), and the realtime line reports "could not be checked" instead of
+crashing.
+
+### Changed — small things a Linux user would have hit
+
+- The ☰ → Logging note builds its path with the platform's separator. On Windows it still reads
+  `logs\omega.txt`.
+- `DeviceCapabilities.unusableReason` lets a backend name the specific problem, such as an ALSA
+  card held by the sound server. Before, every unusable device got the WASAPI sentence, which tells
+  the user to try exclusive mode or ASIO. It defaults to null, so the Windows backends say what
+  they always said.
+- `AudioStream.schedulingNote` reports whether the audio thread got realtime priority. It is
+  logged, printed by `--selftest`, and turns the status line red when the answer is no. It
+  defaults to null, so Windows is unaffected.
+- `--list-backends` on Linux ends with a `Realtime:` line, worked out by trying a promotion on a
+  throwaway thread. When it fails, the line gives the fix for each distribution family.
+
+**Not changed:** the file dialogs. `docs/linux-compat.md` expected `FileDialog` to be poor on
+Linux, but with GTK present the JDK uses the GTK dialog. They have not yet been opened on Linux.
+
 ## [1.0.67-beta] — 2026-10-15
 
 ### Fixed — `gradlew` was committed without its executable bit

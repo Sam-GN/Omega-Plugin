@@ -1,10 +1,12 @@
 # Compile and test on both targets.
 #
-# Ubuntu is here for a reason beyond redundancy: no part of this program has ever been executed on
-# Linux (known-issues.md §5), and while a green build is a long way from a working audio path, it is
-# the cheapest evidence there is that nothing below the backend seam has quietly grown a Windows
-# assumption. Not one test needs an audio device, and none of them touches AWT, so the Linux job
-# needs no sound server and no X display.
+# Linux is a shipping platform since 1.1.0, so its leg also packs and smoke-tests the AppImage: a
+# packaging break is caught on the pull request rather than by a red release after the merge. Not
+# one test needs an audio device, and none of them touches AWT, so neither leg needs a sound server
+# or a display.
+#
+# ubuntu-22.04 rather than -latest for the same reason release.yml uses it: an AppImage runs against
+# the host's glibc, so the image tested here should be built on the same floor as the one shipped.
 name: build
 
 on:
@@ -21,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ windows-latest, ubuntu-latest ]
+        os: [ windows-latest, ubuntu-22.04 ]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -50,7 +52,7 @@ jobs:
       # Run on one OS only: the answer cannot differ between them, and the failure message should
       # appear once rather than twice.
       - name: Require the version to be unreleased
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         shell: bash
         run: |
           version=$(./gradlew -q properties --property version | sed -n 's/^version: //p')
@@ -69,6 +71,29 @@ jobs:
       - name: Build and test
         shell: bash
         run: ./gradlew build --stacktrace
+
+      # Pinned by version and checksum; the same pin is in release.yml, and the two change together.
+      - name: Pack and smoke-test the AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          ./gradlew appImage -Pappimagetool="$RUNNER_TEMP/appimagetool" --stacktrace
+          image=$(ls build/distributions/Omega-Plugin-*-Linux.AppImage)
+          APPIMAGE_EXTRACT_AND_RUN=1 "$image" --list-backends | tee report.txt
+          grep -q "Collector: generational ZGC. Good." report.txt
+
+      # For whoever wants to try a pull request on Linux without building it.
+      - name: Keep the AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: build/distributions/Omega-Plugin-*-Linux.AppImage
+          retention-days: 14
 
       - name: Upload test results
         if: failure()

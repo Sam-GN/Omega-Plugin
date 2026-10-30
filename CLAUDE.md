@@ -15,8 +15,10 @@ IntelliJ Platform dependency. Don't assume IDE APIs are on the classpath.
 
 **Public at `https://github.com/Sam-GN/Omega-Plugin` since 2026-10-15** — the URL `ui/Licences.kt`
 and README.md name, because GPLv3 §6 needs a binary's source to be reachable. `.github/workflows/`
-holds a build workflow (Windows and Ubuntu) and a release workflow that runs only after the build
-has passed on both; both have run. **Every push to
+holds a build workflow (Windows and Ubuntu 22.04, the latter also packing and smoke-testing the
+AppImage) and a release workflow that runs only after the build has passed on both, then packages the
+Windows zip and the Linux AppImage in parallel and publishes both in one draft. The Ubuntu version is
+the AppImage's glibc floor — do not move it to `-latest`. **Every push to
 `main` is a release**: the version in `build.gradle.kts` becomes the tag, so every change bumps it
 and adds a CHANGELOG entry, and the workflows fail a push that does not.
 
@@ -39,7 +41,7 @@ be confused with each other:
 | File | What it is |
 | --- | --- |
 | `docs/known-issues.md` | **Defects in code that already ships.** Nothing speculative. Each entry is a shortcoming in something a user can switch on today. |
-| `docs/linux-compat.md` | **A work plan**, not a proposal: what has to happen for the program to run on Linux, numbered `F1`–`F11` against workstreams `W1`–`W7`. AppImage is the chosen format. |
+| `docs/linux-compat.md` | **The Linux work plan**, numbered `F1`–`F11` against workstreams `W1`–`W7`, mostly built in 1.1.0. Its §0 is the current status and overrides the plan text below it. AppImage is the chosen format. |
 | `docs/low-latency-backend.md` | The design behind the `AudioBackend` seam. History rather than a plan — the seam it describes is built. |
 | `docs/virtual-io.md` | Routing Omega into and out of other applications. |
 | `docs/WhatsDone.md` | What has been finished, against the original requirements. |
@@ -109,6 +111,17 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
   - `audio/asio/` — the primary path on Windows. `IASIO` is reached by walking its COM vtable by
     hand through JNA; there is no Steinberg SDK and there must never be one (licence).
   - `audio/wasapi/` — exclusive, event-driven, two endpoints and two clocks.
+  - `audio/jack/` — Linux's primary path, and PipeWire's through its JACK library. One clock, the
+    server's realtime thread, so it is shaped like ASIO. Each client owning hardware ports is a
+    device. `JackLibrary` tries PipeWire's shim **by path** before the system `libjack.so.0` when
+    PipeWire is running: Debian and Ubuntu ship it off the library path, and a machine with jack2
+    installed and no `jackd` would otherwise find the wrong one and give up.
+  - `audio/alsa/` — Linux's always-present rung: `Default` through the sound server, or `hw:`
+    straight to a card. Capture and playback are separate `BackendDevice`s (`in:`/`out:` ids),
+    because `capabilities()` must know which direction it is answering for. The thread is ours.
+  - `audio/linux/` — `LinuxRt` (realtime via `SCHED_FIFO`, else rtkit over D-Bus) and
+    `LinuxPlatform` (the OS check). **They are separate on purpose**: `LinuxRt` declares JNA
+    interfaces, so touching it loads JNA, and the OS check is what has to work when JNA does not.
   - `audio/javasound/` — the bottom rung, always available. The old `pump()` loop, priming, line
     sizing and `CushionRegulator` all live here now, because they are answers to Java Sound's
     behaviour and to nothing else.
@@ -227,8 +240,10 @@ percentage; everything after it marshals back through `invokeLater`.
 
 ### Adding a backend
 
-Implement `AudioBackend`, add its fully-qualified name to `Backends.OPTIONAL`, and nothing else in
-the app changes. Rules the registry depends on:
+Implement `AudioBackend`, add its fully-qualified name **and its OS** to `Backends.OPTIONAL`, and
+nothing else in the app changes. A backend is only constructed on its own OS, so a Windows user never
+sees a JACK entry and the Windows picker is exactly what it was before Linux existed —
+`BackendSeamTest` pins that in both directions. Rules the registry depends on:
 
 - **It must never throw from the constructor or from `devices()`.** A backend that cannot run
   reports `Availability.Unavailable(reason)` and the reason goes in front of the user verbatim.
@@ -256,6 +271,18 @@ the app changes. Rules the registry depends on:
 - **Declare what the adapter adds.** `StreamFormat.adapterLatencyFrames` is the ring hop on a
   two-clock backend and the cushion on Java Sound. Hiding it makes cross-backend comparison a lie.
 - **Release in a `finally`.** Under exclusive mode a device left held can need a reboot.
+- **The OS check comes first and must not load JNA.** `LinuxPlatform.isLinux` is JNA-free;
+  `LinuxRt.isLinux` used to exist and broke this — JNA off the classpath made the guard itself fail,
+  and `--list-backends` crashed on it. `Rt.isWindows` has the same flaw, since `Rt` declares JNA
+  interfaces; the registry's `Throwable` catch contains it on Windows (the backend becomes an
+  explained `Broken` entry), but code outside the registry should not lean on it.
+- **Realtime calls go through a direct mapping.** JNA's interface mapping allocates an argument array
+  on every call; `JackRt` and `AlsaRt` are `Native.register`ed `external fun`s taking primitives and
+  existing `Pointer`s, and pass buffer addresses as `Long` so a partial read needs no `Pointer.share`.
+- **A thread of ours waits for everything it still needs, not for a period.** ALSA wakes on
+  `avail_min`, one period; a loop that reads a partial period and then waits sleeps a whole period
+  for the remainder and falls behind the card every cycle. That was an xrun every third period at
+  256 frames until `AlsaStream` checked `snd_pcm_avail` before reading.
 
 The degradation path is tested by deliberately breaking it — run with JNA off the classpath and
 confirm the app starts, streams on Java Sound and explains itself. A degradation path that has never
@@ -498,10 +525,20 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 - The engine is mono end to end; stereo output is the same signal duplicated across channels.
   `StreamRequest` already carries channel counts, so widening `AudioProcessor.process` to two buffers
   later would not reopen the seam.
-- **Nothing here has run on Linux.** The seam is shaped so that it can: `Pairing`,
-  `DeviceCapabilities.fixedSampleRate` and `StreamEvents.onFormatChanged` all exist because of JACK
-  and ALSA, not because of Windows. A Linux backend implements `AudioBackend` and touches nothing in
-  `dsp/` or `ui/`. Targeting the JACK API also gets PipeWire through its `libjack` shim.
+- **Linux runs since 1.1.0, measured on one laptop** (Manjaro, PipeWire, HDA Intel PCH, no guitar
+  interface). ALSA direct holds 256 frames under `--chain --stress`; 128 and 64 fail on that card,
+  as does ALSA's own `alsaloop`, so the card is the limit. JACK has only met a dummy-driver jackd.
+  `known-issues.md` §5 lists what is unverified. The seam needed no change beyond two defaulted
+  members — `DeviceCapabilities.unusableReason` and `AudioStream.schedulingNote` — and nothing in
+  `dsp/`.
+- **The AppImage needs a vendor JDK as the build toolchain.** The image names its runtime's exact
+  build from the JDK's `release` file, and a distribution JDK (Arch's, for one) leaves
+  `IMPLEMENTOR_VERSION` out, so `appDirFiles` stops rather than ship a notice with a hole in it. CI
+  uses Temurin through `setup-java`. `appimagetool` is not fetched by Gradle; pass
+  `-Pappimagetool=`. CI pins 1.9.1 by SHA-256 in **both** workflows — change them together.
+- **Realtime on Linux is an account setting, not ours.** rtkit grants it unprivileged on most desktops
+  (priority 20 here, with `rtprio` 0), but only after the process caps `RLIMIT_RTTIME`; `LinuxRt`
+  does that. `--list-backends` ends with a `Realtime:` line naming the fix per distribution family.
 - A seam validated by one native implementation is probably the wrong seam. It now has two (ASIO,
   WASAPI) plus Java Sound, and the two natives have genuinely different shapes — one clock versus
   two — which is the useful kind of evidence.
@@ -511,7 +548,9 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-304 tests in `src/test/kotlin/`, none of which needs an audio device. The useful patterns are impulse
+313 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
+it runs on Windows too. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
 extreme settings, and decay over time (`ReverbTest`).
 

@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "org.example"
-version = "1.0.67-beta"
+version = "1.1.0-beta"
 
 repositories {
     mavenCentral()
@@ -641,5 +641,141 @@ val exeZip by tasks.registering(Zip::class) {
         // GPLv3 section 4, the same as everywhere else: the licence travels with the program.
         from(rootProject.file("LICENSE"))
         from(rootProject.file("README.md"))
+    }
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * The Linux AppImage: the same program and the same kind of bundled runtime, in one file.
+ *
+ * Structurally `exeZip` with a different launcher. An AppDir is a folder — `AppRun`, a `.desktop`
+ * entry, an icon, the jar and a jlink runtime — and `appimagetool` squashes it into one executable
+ * that runs on any distribution without installing anything, including the immutable ones (SteamOS,
+ * Bazzite) where a `.deb` or `.rpm` cannot go. See docs/linux-compat.md for why AppImage and not
+ * Flatpak.
+ *
+ * `portableRuntime` is reused unchanged: jlink builds for the platform it runs on, so on a Linux
+ * host it already produces a Linux runtime. That is also why this can only be built on Linux, the
+ * same way the exe can only be built on Windows.
+ *
+ * **The glibc floor is the build machine's.** Nothing here is compiled natively — the runtime is
+ * Temurin's and JNA ships its own stub — but the AppImage is only promised to run on systems at
+ * least as new as the one that built it, so the release builds on the oldest Ubuntu runner.
+ * ---------------------------------------------------------------------------------------------- */
+
+val appDir = layout.buildDirectory.dir("appimage/OmegaPlugin.AppDir")
+
+/**
+ * What the AppImage says about the runtime it carries — the GPLv2 §3 obligation the Windows read-me
+ * discharges, in the place a Linux user would look: inside the image, beside `runtime/legal/`.
+ * Read off the toolchain for the same reason, so it names the build actually shipped.
+ */
+fun linuxRuntimeNotice(version: String, runtime: RuntimeProvenance): String =
+    """
+    Omega-Plugin $version - AppImage for Linux x86_64
+    =================================================
+
+    The runtime/ folder inside this AppImage is ${runtime.build} - OpenJDK, built by
+    ${runtime.vendor} - used under GPLv2 with the Classpath Exception. Its own notices are in
+    runtime/legal/. Its source is published at
+        ${runtime.source}
+    and the build named here corresponds to a tag in that repository.
+
+    Omega-Plugin itself is GPLv3-or-later; see LICENSE, and Menu -> Licences in the app.
+    """.trimIndent() + "\n"
+
+val appDirGenerated = layout.buildDirectory.dir("appimage/generated")
+
+/** The three files the AppDir needs that are written rather than copied. */
+val appDirFiles by tasks.registering {
+    group = "distribution"
+    description = "Writes AppRun, the .desktop entry and the runtime notice for the AppDir"
+    val jarName = "OmegaPlugin-${project.version}-all.jar"
+    val flags = gcArgs.joinToString(" ")
+    val versionText = project.version.toString()
+    val outputDir = appDirGenerated
+    outputs.dir(outputDir)
+    doLast {
+        val dir = outputDir.get().asFile
+        dir.deleteRecursively()
+        dir.mkdirs()
+        // The bundled runtime and nothing else, the F5 rule: a `java` from PATH is whatever the
+        // distribution ships, routinely 17, and generational ZGC needs 21. Resolved through
+        // readlink so it works from the mounted image and from an extracted one alike.
+        val appRun = dir.resolve("AppRun")
+        appRun.writeText(
+            """
+            #!/bin/sh
+            # Omega-Plugin AppImage launcher. Runs the Java inside this image, never one from PATH.
+            # Diagnostics work from a terminal:  ./Omega-Plugin-*.AppImage --list-backends
+            HERE="${'$'}(dirname "${'$'}(readlink -f "${'$'}0")")"
+            exec "${'$'}HERE/runtime/bin/java" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 $flags -jar "${'$'}HERE/lib/$jarName" "${'$'}@"
+            """.trimIndent() + "\n"
+        )
+        appRun.setExecutable(true, false)
+        // StartupWMClass is the JDK's own WM_CLASS for this main class: dots become dashes. Without
+        // it a dock shows the running window as a second, iconless "java" next to the launcher.
+        dir.resolve("omega-plugin.desktop").writeText(
+            """
+            [Desktop Entry]
+            Type=Application
+            Name=Omega-Plugin
+            GenericName=Guitar effects
+            Comment=Realtime guitar effects processor
+            Exec=OmegaPlugin
+            Icon=omega-plugin
+            Terminal=false
+            Categories=AudioVideo;Audio;
+            StartupWMClass=org-example-MainKt
+            """.trimIndent() + "\n"
+        )
+        dir.resolve("RUNTIME-NOTICE.txt").writeText(linuxRuntimeNotice(versionText, runtimeProvenance()))
+    }
+}
+
+val appDirStage by tasks.registering(Sync::class) {
+    group = "distribution"
+    description = "Assembles the AppDir: AppRun, .desktop, icon, jar and the bundled runtime"
+    into(appDir)
+    into("lib") { from(fatJar) }
+    into("runtime") { from(portableRuntime) }
+    from(appDirFiles)
+    from(rootProject.file("LICENSE"))
+    from(rootProject.file("README.md"))
+    // The icon twice, for two readers: the .desktop entry names it and appimagetool wants it at the
+    // root under that name; file managers look for .DirIcon.
+    from(rootProject.file("src/main/resources/icons/omega-256.png")) { rename { "omega-plugin.png" } }
+    from(rootProject.file("src/main/resources/icons/omega-256.png")) { rename { ".DirIcon" } }
+}
+
+/**
+ * `appimagetool` is found, in order, from `-Pappimagetool=<path>`, the `APPIMAGETOOL` environment
+ * variable, or `appimagetool` on PATH. It is not downloaded here: a build that fetches and runs an
+ * executable from the network should say so where a person can see it, and CI does, with a pinned
+ * version and checksum (.github/workflows/release.yml).
+ *
+ *     ./gradlew appImage -Pappimagetool=/path/to/appimagetool-x86_64.AppImage
+ *
+ * Like `exeZip`, `build` does not depend on this; it is a release artefact.
+ */
+val appImage by tasks.registering(Exec::class) {
+    group = "distribution"
+    description = "Packs the AppDir into Omega-Plugin-<version>-Linux.AppImage (Linux only)"
+    dependsOn(appDirStage)
+    // The name a guitarist reads on the release page, matching the Windows zip's "-Windows".
+    val output = layout.buildDirectory.file("distributions/Omega-Plugin-${project.version}-Linux.AppImage")
+    val tool = (findProperty("appimagetool") as String?) ?: System.getenv("APPIMAGETOOL") ?: "appimagetool"
+    inputs.dir(appDir)
+    outputs.file(output)
+    doFirst {
+        if (!System.getProperty("os.name").startsWith("Linux")) {
+            error("The AppImage bundles a Linux runtime made by jlink on this machine, so it can only be built on Linux")
+        }
+        output.get().asFile.parentFile.mkdirs()
+        output.get().asFile.delete()
+        // ARCH because appimagetool will not guess it; extract-and-run because a CI container has
+        // no FUSE and the tool is itself an AppImage.
+        environment("ARCH", "x86_64")
+        environment("APPIMAGE_EXTRACT_AND_RUN", "1")
+        commandLine(tool, "--no-appstream", appDir.get().asFile.absolutePath, output.get().asFile.absolutePath)
     }
 }

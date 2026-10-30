@@ -1,13 +1,35 @@
 # Linux compatibility — what has to happen
 
-**Status: plan. Nothing here is built.** Written 2026-08-17 against 1.0.59-alpha. Goal is **maximum
-distribution coverage**, and the format chosen for that is **AppImage** — see §3 for why, and for
-what it rules out.
+**Status: largely built in 1.1.0-beta (2026-10-29).** Written 2026-08-17 against 1.0.59-alpha as
+a plan, when nothing had been run on Linux. Goal is **maximum distribution coverage**, and the
+format chosen for that is **AppImage** — see §3 for why, and for what it rules out.
 
-**No part of this program has ever been executed on Linux.** Every prediction below comes from
-reading the source, not from running it. Where something is genuinely unknown it says so rather than
-guessing, because the difference between "will need a tweak" and "has never been tried" is the whole
-value of this document.
+The sections below are the original plan, kept because the reasoning in them is still the reasoning
+the code follows. **§0 is the current state** and overrides them wherever the two disagree.
+
+## 0. Status at 1.1.0-beta
+
+Measured on one machine: Manjaro, KDE on Wayland, PipeWire 1.6.9, an HDA Intel PCH card, no guitar
+interface. CHANGELOG 1.1.0-beta has the figures.
+
+| Item | State |
+| --- | --- |
+| **F1** no Linux backend | **Done.** `audio/jack/JackBackend` and `audio/alsa/AlsaBackend`. ALSA was built as well as JACK, not instead of it: on a stock desktop `pipewire-jack` is often absent, and this machine has jack2 installed with no server — JACK alone would have left it on Java Sound. |
+| **F2** Java Sound the only option | **Done**, by F1. |
+| **F3** no realtime scheduling | **Done.** `linux/LinuxRt`: `SCHED_FIFO` directly, else rtkit over D-Bus (granted priority 20 here with `rtprio` 0). JACK needs neither; its thread is the server's. `--list-backends` ends with a `Realtime:` line, and the status bar turns red when a stream runs without it. |
+| **F4** bundle Windows-only | **Done.** `appImage`, reusing `portableRuntime` unchanged — jlink already builds for its host. |
+| **F5** `omega.sh` calls bare `java` | **Done for the AppImage**, whose `AppRun` uses `runtime/bin/java`. `build/libs/omega.sh` still uses PATH, as `omega.bat` does; both are developer launchers. |
+| **F6** Java Sound tuned for Windows | **Open.** Ran clean in a short selftest; not re-tuned. Low priority now it is the third rung. |
+| **F7** fixed sizes, scaling, small screens | **Open.** The GUI has started under KDE Wayland (XWayland) without an exception; nobody has looked at it at 1280×800 or under fractional scaling. |
+| **F8** `FileDialog` on Linux | **Not changed, deliberately.** The JDK uses the GTK chooser when GTK is present, which every target has; the poor X11 dialog this item feared is the no-GTK fallback. To be confirmed by opening one. |
+| **F9** `.desktop` entry and icon | **Done**, inside the AppImage. `StartupWMClass=org-example-MainKt`. |
+| **F10** backslash in the logging note | **Done.** `File.separator`. |
+| **F11** degradation path never exercised | **Done**, on Linux against 1.1.0-beta, and it found a crash — see CHANGELOG. |
+| CI | **Done.** Both workflows build on ubuntu-22.04, the glibc floor; release ships the AppImage beside the Windows zip. |
+
+**Still unmeasured, and the next thing worth doing:** JACK through PipeWire on real hardware, and
+any path at 64 frames on a guitar interface. This laptop's card fails 128 and 64 frames in duplex
+even under ALSA's own `alsaloop`, so it cannot answer the 10–12 ms question either way.
 
 Distinct from `theme-optional.md`, `profile-optional.md` and `pickup-optional.md`, which propose
 features nobody has promised. This is not a feature — it is the work required to make what already
@@ -96,8 +118,12 @@ Windows one. → **W6**
 
 `AsioBackend.availability` evaluates `!Rt.isWindows` **first**, so the `when` short-circuits before
 `AsioDriver.registered()` touches `Advapi32Util`. No JNA Windows class is loaded on Linux and there
-is no `UnsatisfiedLinkError` to catch. `WasapiBackend` does the same. `--list-backends` would print
-all three as unavailable with honest reasons.
+is no `UnsatisfiedLinkError` to catch. `WasapiBackend` does the same.
+
+*Since 1.1.0:* the registry no longer even constructs a backend on the wrong OS — `Backends.OPTIONAL`
+pairs each with its platform — so Linux shows no ASIO entry at all. The ordering below still holds
+inside each backend as a second line of defence, and the JACK and ALSA backends follow it, through
+`LinuxPlatform` rather than `LinuxRt` so that the check loads no JNA.
 
 **Keep that ordering.** Reversing the branches would turn a clean "ASIO is a Windows driver model"
 into a `NoClassDefFoundError` caught three layers away and reported as something else.

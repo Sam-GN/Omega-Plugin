@@ -42,13 +42,21 @@ import org.example.util.Log
  */
 object Backends {
 
+    /**
+     * Each optional backend with the OS it belongs to, and it is only loaded there.
+     *
+     * Not merely tidiness. A Linux backend listed on Windows would appear in the driver picker as
+     * "unavailable", and so would ASIO on Linux — a list of things this machine was never going to
+     * have, in front of the one person least able to tell which entries matter. The backends still
+     * check the OS first in their own `availability`, so this filter is a statement about what to
+     * show and not the only thing standing between Windows and `libasound`.
+     */
     private val OPTIONAL = listOf(
-        "org.example.audio.asio.AsioBackend",
-        "org.example.audio.wasapi.WasapiBackend",
-        "org.example.audio.wasapi.WasapiSharedBackend",
-        // Linux, when it is written. Nothing above this line assumes Windows.
-        "org.example.audio.jack.JackBackend",
-        "org.example.audio.alsa.AlsaBackend",
+        "org.example.audio.asio.AsioBackend" to "Windows",
+        "org.example.audio.wasapi.WasapiBackend" to "Windows",
+        "org.example.audio.wasapi.WasapiSharedBackend" to "Windows",
+        "org.example.audio.jack.JackBackend" to "Linux",
+        "org.example.audio.alsa.AlsaBackend" to "Linux",
     )
 
     private val cached: List<AudioBackend> by lazy { load() }
@@ -100,7 +108,9 @@ object Backends {
 
     private fun load(): List<AudioBackend> {
         val found = ArrayList<AudioBackend>()
-        for (className in OPTIONAL) {
+        val os = System.getProperty("os.name", "")
+        for ((className, platform) in OPTIONAL) {
+            if (!os.startsWith(platform)) continue
             try {
                 val instance = Class.forName(className).getDeclaredConstructor().newInstance()
                 found += instance as AudioBackend

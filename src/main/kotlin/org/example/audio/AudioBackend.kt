@@ -42,11 +42,15 @@ enum class BackendId(val displayName: String, val rank: Int) {
     ASIO("ASIO", 0),
     WASAPI_EXCLUSIVE("WASAPI exclusive", 1),
 
-    /** Not implemented here. Listed so the ladder and the UI already have a place for it. */
+    /**
+     * Linux's ASIO: one clock, a server-owned realtime thread. Reaches PipeWire through its JACK
+     * shim as well as a real jackd. Shares a rank with WASAPI exclusive because the two never meet —
+     * the registry only loads a backend on the OS it is for.
+     */
     JACK("JACK / PipeWire", 1),
 
-    /** Not implemented here. */
-    ALSA("ALSA direct", 2),
+    /** Linux's always-present rung: the sound server through `default`, or a card directly. */
+    ALSA("ALSA", 2),
 
     /**
      * The same API as [WASAPI_EXCLUSIVE], through the Windows mixer instead of around it.
@@ -121,6 +125,12 @@ data class DeviceCapabilities(
     /** Non-null when the rate is not ours to choose (JACK). The UI shows it read-only. */
     val fixedSampleRate: Int? = null,
     val hasControlPanel: Boolean = false,
+    /**
+     * Why this device cannot be used right now, when the backend knows better than a generic
+     * sentence would — an ALSA card held by the sound server, say. Null means usable, or that the
+     * backend has nothing more specific than an empty [bufferSizes] to say.
+     */
+    val unusableReason: String? = null,
 )
 
 data class StreamRequest(
@@ -207,6 +217,13 @@ interface AudioStream : AutoCloseable {
      * Anything below about 0.995 means the device was starved and the user heard it.
      */
     val realtimeRatio: Float get() = 1f
+
+    /**
+     * Whether the thread running the callback got realtime scheduling, phrased for a log line —
+     * null where the question does not arise or the backend cannot tell. Only a backend that owns
+     * its audio thread (ALSA) has a real answer; on Windows MMCSS is joined silently as it always was.
+     */
+    val schedulingNote: String? get() = null
 
     fun start()
     fun stop()

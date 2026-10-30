@@ -27,10 +27,17 @@
 # archives beside the file attached below. Licences.SOURCE_URL points at this repository for the same reason, so the
 # program itself can say where its source is.
 #
-# windows-latest is not a preference. `exeZip` bundles a jlink image, and a jlink image is
-# per-platform; jpackage is stricter still, emitting a native launcher for the machine it runs on,
-# so the `.exe` can only come off a Windows runner. It needs no WiX, because it builds no installer
-# — `--type app-image` is a folder with a launcher in it, not an `.msi`.
+# Two packaging jobs, because a jlink image is per-platform and so is everything built around one.
+# The `.exe` can only come off a Windows runner — jpackage emits a native launcher for the machine it
+# runs on — and needs no WiX, because it builds no installer: `--type app-image` is a folder with a
+# launcher in it, not an `.msi`. The AppImage can only come off a Linux one, and specifically the
+# *oldest* supported Ubuntu: an AppImage runs against the host's glibc, so it is promised to work on
+# systems at least as new as the one that built it and no others. Building on ubuntu-latest would
+# quietly drop every distribution a year or two older.
+#
+# Neither packaging job publishes. Each uploads its file, and `publish` attaches both to one draft,
+# so a release never exists with one platform missing — if either packaging job fails, nothing is
+# published at all.
 name: release
 
 on:
@@ -50,11 +57,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: windows-latest
+  # Once, ahead of both platforms: the answer cannot differ between them.
+  version:
+    runs-on: ubuntu-latest
     # A failed or cancelled build also "completes" and fires this. Only a green one releases.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
     steps:
       # fetch-depth: 0 because the version check below asks whether a tag exists, and the default
       # single-commit checkout fetches no tags at all — every version would look unreleased.
@@ -81,41 +91,129 @@ jobs:
           fi
           tag="v$version"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           if git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
             echo "::error::$tag is already released. Every push to main must bump the version in build.gradle.kts and add a CHANGELOG entry."
             exit 1
           fi
           echo "::notice::releasing $tag"
 
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
       - name: Build, test and bundle
         shell: bash
         run: ./gradlew build exeZip --stacktrace
 
-      - name: Publish the release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          # The tag does not exist yet; the action creates it at this commit.
-          tag_name: ${{ steps.version.outputs.tag }}
-          draft: true
-          generate_release_notes: true
-          # One asset, deliberately. The audience is guitarists, not developers: a release page
-          # offering a jar, two loose launchers and two different zips asks a musician to understand
-          # the difference between them before they can play a note, and the wrong choice fails in a
-          # way that reads as "the app is broken". The `.exe` bundle is the only one that needs
-          # nothing installed, so it is the only one offered.
-          #
-          # Dropping the standalone LICENSE costs nothing under GPLv3: §4 wants the licence *with
-          # the program*, and it is inside this zip already (so is README.md, which carries the
-          # third-party table and the source URL). §6(d) wants the source from the same place, and
-          # GitHub attaches the tag's source archives to every release on its own.
-          files: |
-            build/distributions/Omega-Plugin-*-Windows.zip
+          name: windows
+          path: build/distributions/Omega-Plugin-*-Windows.zip
+          if-no-files-found: error
 
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-release
+          name: test-results-windows
           path: |
             build/reports/tests/test
             build/test-results/test
+
+  linux:
+    needs: version
+    # The glibc floor. See the note at the top of this file before changing it.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      # Temurin specifically, not whatever the runner has: the bundled runtime's notice names the
+      # exact build from its `release` file, and a distribution JDK's leaves that field out.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Pinned by version and by checksum. This is an executable fetched from the network and run
+      # with the release's write token in scope; "continuous" would be a different binary every week.
+      - name: Fetch appimagetool
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+
+      - name: Build, test and bundle
+        shell: bash
+        run: ./gradlew build appImage -Pappimagetool="$RUNNER_TEMP/appimagetool" --stacktrace
+
+      # The cheapest proof the image is whole: it starts on a runner with no sound card and no
+      # display, finds its own runtime, and runs the collector it was built for.
+      - name: Smoke-test the AppImage
+        shell: bash
+        run: |
+          image=$(ls build/distributions/Omega-Plugin-*-Linux.AppImage)
+          APPIMAGE_EXTRACT_AND_RUN=1 "$image" --list-backends | tee report.txt
+          grep -q "Collector: generational ZGC. Good." report.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: build/distributions/Omega-Plugin-*-Linux.AppImage
+          if-no-files-found: error
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-linux
+          path: |
+            build/reports/tests/test
+            build/test-results/test
+
+  publish:
+    needs: [ version, windows, linux ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          # The tag does not exist yet; the action creates it at the commit both platforms built.
+          tag_name: ${{ needs.version.outputs.tag }}
+          target_commitish: ${{ needs.version.outputs.sha }}
+          draft: true
+          generate_release_notes: true
+          # One file per platform, deliberately. The audience is guitarists, not developers: a
+          # release page offering a jar, loose launchers and several archives asks a musician to
+          # understand the difference before they can play a note, and the wrong choice fails in a
+          # way that reads as "the app is broken". Each of these needs nothing installed.
+          #
+          # Dropping the standalone LICENSE costs nothing under GPLv3: §4 wants the licence *with
+          # the program*, and it is inside both (so is README.md, which carries the third-party
+          # table and the source URL). §6(d) wants the source from the same place, and GitHub
+          # attaches the tag's source archives to every release on its own.
+          files: |
+            dist/Omega-Plugin-*-Windows.zip
+            dist/Omega-Plugin-*-Linux.AppImage

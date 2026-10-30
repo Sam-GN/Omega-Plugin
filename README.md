@@ -1,6 +1,6 @@
 # Omega-Plugin
 
-A guitar effects processor for Windows. Plug your interface in, pick it in the app, and play through
+A guitar effects processor for Windows and Linux. Plug your interface in, pick it in the app, and play through
 a board of pedals — gate, compressor, EQ, gain, overdrive, an amp capture, a cabinet, FX slots,
 delay, reverb and a master volume — with a metronome and a drum machine above it. Pedals drag into
 any order, and FX slots are added and removed. Despite the name, it is not an IDE plugin — "plugin"
@@ -15,17 +15,35 @@ captured ships with the program, which is why those two have a LOAD button and n
 
 ## Get it
 
-1. Download `Omega-Plugin-<version>-Windows.zip` from the
-   [Releases page](https://github.com/Sam-GN/Omega-Plugin/releases).
-2. Unzip it anywhere you can write to.
-3. Double-click `OmegaPlugin.exe`.
+From the [Releases page](https://github.com/Sam-GN/Omega-Plugin/releases):
 
-Nothing to install. Java is inside the zip, so an older Java already on the machine cannot interfere.
-Keep the folder together: the `.exe`, `app\` and `runtime\` are one unit. A `READ-ME-FIRST.txt` in
-the folder repeats this and the troubleshooting steps below.
+**Windows** — download `Omega-Plugin-<version>-Windows.zip`, unzip it anywhere you can write to, and
+double-click `OmegaPlugin.exe`. Keep the folder together: the `.exe`, `app\` and `runtime\` are one
+unit. A `READ-ME-FIRST.txt` in the folder repeats this and the troubleshooting steps below.
 
-Windows x64 only, and beta: it works, on one platform, against one audio interface, and has not yet
-been run on anyone else's. No part of it has ever been executed on Linux.
+**Linux** — download `Omega-Plugin-<version>-Linux.AppImage`, make it executable and run it:
+
+    chmod +x Omega-Plugin-*-Linux.AppImage
+    ./Omega-Plugin-*-Linux.AppImage
+
+One file for every distribution — Arch, Manjaro, Debian, Ubuntu, Mint, Fedora, and the immutable
+ones such as SteamOS and Bazzite. It works with whatever sound system the machine has. For the lowest
+latency, install your distribution's PipeWire JACK package (`pipewire-jack`; on Fedora
+`pipewire-jack-audio-connection-kit`); without it, Omega uses ALSA, through the sound server or
+straight to the card. If nothing happens when you run it, your system may lack FUSE 2; running it
+with `--appimage-extract-and-run` works without.
+
+Nothing to install on either. Java is inside, so an older Java already on the machine cannot
+interfere.
+
+**Updating** is manual on both: the program does not check for new versions, so look at the Releases
+page now and then. On Windows, unzip the new version and delete the old folder; on Linux, download
+the new AppImage, `chmod +x` it and delete the old file. Nothing is lost: settings and presets live
+in `%APPDATA%\omega-plugin` on Windows and `~/.config/omega-plugin` on Linux, and recordings in an
+`Omega-Plugin` folder on the Desktop or in the home folder, all outside the program itself.
+
+x64 only, and beta. On Windows it has been played through one audio interface; on Linux it has run
+on one laptop, and no guitar interface has been tried there yet.
 
 ## First run
 
@@ -47,6 +65,14 @@ Choose the driver in the DRIVER picker; the app falls back down the list on its 
 | ASIO | **6.4 ms** at 64 frames, **9.9 ms** at 128 | Needs a driver from your interface's maker. Lowest stable size measured: 16 frames. |
 | WASAPI exclusive | 18.0 ms at 264 frames | No extra driver needed. Takes sole control of the device. |
 | Java Sound | ~160-200 ms | Always available, never fast. For checking a signal path, not for playing. |
+
+On Linux the drivers are different, and so far measured only on one laptop's built-in card:
+
+| Backend | Measured | Notes |
+| --- | ---: | --- |
+| JACK / PipeWire | not yet on a guitar interface | Linux's equivalent of ASIO. Needs `pipewire-jack` (or a running jackd). The server owns the rate; BUFFER asks it to resize. |
+| ALSA | 16 ms at 256 frames, clean | `Default` goes through the sound server and coexists with other programs; the `(direct)` entries reach the card itself, while nothing else holds it. |
+| Java Sound | ~50-200 ms | As on Windows. |
 
 Those are the driver's own figures. For a true cable-to-cable measurement, patch a lead from the
 output back into the input and run `--measure` (see below).
@@ -81,9 +107,16 @@ Watch `realtimeRatio`, not `deadlineMisses`. Below 100 % means audio was lost ev
 The output is redirected to a file because `OmegaPlugin.exe` is a windowed program and prints nothing
 to the console on its own. When reporting a bug, attach `report.txt`.
 
+On Linux, run the same commands on the AppImage from a terminal, for example
+`./Omega-Plugin-*-Linux.AppImage --list-backends`. They print directly. The last line says whether
+the audio thread can get realtime priority. If it cannot, it names the fix for your distribution,
+which is usually joining the `realtime` or `audio` group and logging back in. Without realtime
+priority, the sound crackles under load.
+
 ## For developers
 
-Kotlin on the JVM, Swing for the UI, JNA for the ASIO and WASAPI backends. There is no native build
+Kotlin on the JVM, Swing for the UI, JNA for the native audio backends — ASIO and WASAPI on
+Windows, JACK and ALSA on Linux. There is no native build
 step. `CLAUDE.md` is the architecture guide and `CONTRIBUTING.md` the short list of rules that get a
 patch turned down; `docs/` holds the rest.
 
@@ -95,6 +128,11 @@ and a bare `java -jar` cannot be given them — the app detects that and says so
 same diagnostics as the `.exe`, printing to the console directly: `--list-backends`,
 `--list-devices`, `--selftest` and `--measure`.
 
+`./gradlew appImage -Pappimagetool=<path>` builds the Linux AppImage, on Linux only, given
+[appimagetool](https://github.com/AppImage/appimagetool). It needs a vendor JDK 21 such as Temurin as
+the build toolchain: the image names the exact runtime it ships, and a distribution's own JDK does
+not record that, so the build stops rather than leave it out.
+
 `gradlew.bat exeZip` builds the self-contained Windows x64 zip from the Releases page: a bundled
 Java 21 and one real launcher, `OmegaPlugin.exe`, with the JVM flags inside it so there is no way to
 start it without them. `gradlew.bat portableZip` builds the same bundle with `.bat` launchers
@@ -102,12 +140,10 @@ instead, where `omega.bat` prints to the window directly. Neither is part of `bu
 and jpackage cost tens of seconds on every compile.
 
 A push to `main` is a release: once the build has passed on Windows and Linux, the release workflow
-reads the version from `build.gradle.kts`, builds the zip and publishes a draft release tagged with
-it. Every change therefore bumps the version and adds a `CHANGELOG.md` entry.
+reads the version from `build.gradle.kts`, builds the Windows zip and the Linux AppImage, and
+publishes both in one draft release tagged with it. Every change therefore bumps the version and adds a `CHANGELOG.md` entry.
 
-Linux has not been attempted. The backend seam is shaped for JACK and ALSA and the code has no
-Windows assumption below it, but that is a design claim and not a test result. `docs/linux-compat.md`
-is the work plan; treat anything it describes as unbuilt.
+Linux support is new in 1.1.0. `docs/linux-compat.md` records what is done and what is still open.
 
 ## Source and redistribution
 
@@ -151,7 +187,7 @@ the names because a compliance reader wants to see that each licence was looked 
 | --- | --- | --- |
 | Kotlin stdlib | Apache 2.0 | GPLv3-compatible. The Apache 2.0 text ships in the jar at `META-INF/AL2.0`. |
 | JetBrains annotations 13.0 | Apache 2.0 | Not declared anywhere in the build — it arrives transitively under the Kotlin stdlib and ends up in the jar. GPLv3-compatible, the same as the stdlib. |
-| JDK (runtime) | GPLv2 with Classpath Exception | The exception is what permits linking without infecting the application. The Windows zip bundles an Eclipse Temurin build; its `READ-ME-FIRST.txt` names the exact build, and the source is published by Adoptium at <https://github.com/adoptium/jdk21u>. |
+| JDK (runtime) | GPLv2 with Classpath Exception | The exception is what permits linking without infecting the application. The Windows zip and the Linux AppImage each bundle an Eclipse Temurin build; the zip's `READ-ME-FIRST.txt` and the AppImage's `RUNTIME-NOTICE.txt` name the exact build, and the source is published by Adoptium at <https://github.com/adoptium/jdk21u>. |
 | JNA (`jna` + `jna-platform`) | Apache 2.0 **or** LGPL 2.1 | Dual-licensed, and both options are GPLv3-compatible. This project **takes it under LGPL 2.1**, so its notice obligations are the LGPL's: the texts ride along in `META-INF/`. |
 
 This is the contents of the jar, which is the set the licences apply to. The *declared* dependencies

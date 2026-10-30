@@ -48,6 +48,27 @@ class BackendSeamTest {
     }
 
     @Test
+    fun `only this platform's backends are offered`() {
+        // The guard on "Linux support must not change Windows": the driver picker on a Windows box
+        // lists exactly what it listed before JACK and ALSA existed, and a Linux one is not offered
+        // ASIO it can never have. Runs on both CI legs, so each half is checked where it matters.
+        val ids = Backends.all().map { it.id }.toSet()
+        val os = System.getProperty("os.name", "")
+        val windowsOnly = setOf(BackendId.ASIO, BackendId.WASAPI_EXCLUSIVE, BackendId.WASAPI_SHARED)
+        val linuxOnly = setOf(BackendId.JACK, BackendId.ALSA)
+        when {
+            os.startsWith("Windows") -> {
+                assertTrue(ids.none { it in linuxOnly }, "a Linux backend reached the Windows picker: $ids")
+                assertTrue(ids.containsAll(windowsOnly), "a Windows backend went missing: $ids")
+            }
+            os.startsWith("Linux") -> {
+                assertTrue(ids.none { it in windowsOnly }, "a Windows backend reached the Linux picker: $ids")
+                assertTrue(ids.containsAll(linuxOnly), "a Linux backend went missing: $ids")
+            }
+        }
+    }
+
+    @Test
     fun `backends are ordered best first`() {
         val ranks = Backends.all().map { it.id.rank }
         assertEquals(ranks.sorted(), ranks, "backends must be offered lowest rank first")
