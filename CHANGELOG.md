@@ -9,6 +9,44 @@ unverified, it says so.
 
 ---
 
+## [1.5.5-beta] — 2026-10-30
+
+### Changed — the first recording counts as it goes; waveforms show their shape
+
+- While the first lane records, the loop readout counts the seconds as they go, up to the minute,
+  instead of waiting for the lane to be stopped before showing a time.
+- Waveforms are drawn at three times the time resolution — ninety pixels a second rather than
+  thirty, so the minute is 5400 pixels wide under the scrollbar — and each lane is scaled to its
+  own loudest sample, so a quiet take fills its lane as a loud one does. A guitar's attacks and the
+  gaps between them show where before they averaged into a smooth band.
+
+---
+
+## [1.5.4-beta] — 2026-10-30
+
+### Added — click a waveform to play from there; ✕ clears before it removes
+
+- **Click anywhere on a lane's waveform** and the loop plays from that moment; drag to scrub.
+  Every lane shares the playhead, so it moves on all of them. The move lands at the top of the next
+  audio block, so nothing is torn mid-block, and it is refused while a lane is recording, since
+  that lane is being written at the playhead.
+- **✕ clears a lane that holds something**, keeping the lane; pressed again on the now-empty lane
+  it removes it. The first lane is never removed, so its ✕ is dimmed once it is empty. Clearing the
+  last lane with anything in it frees the loop length, as before.
+
+---
+
+## [1.5.3-beta] — 2026-10-30
+
+### Added — play and pause for the loop box
+
+A transport button under the lanes, as wide as their button blocks and aligned with them, to the
+left of the time scrollbar. Pause fades every lane to silence and holds the playhead; play resumes
+from there. Pausing ends a recording where it is, and REC while paused starts the transport again.
+The readout says "paused at" while it is.
+
+---
+
 ## [1.5.2-beta] — 2026-10-30
 
 ### Changed — a knob answers to the mouse only on the dial

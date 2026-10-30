@@ -464,6 +464,11 @@ back. The rules it depends on:
   opening thread, a minute at the stream's rate — about 92 MB for four at 96 kHz. A rate change
   resamples the lanes offline with the chain's own `Resampler`; they are never dropped. The engine's
   allocation test runs with the looper playing and recording.
+- **A click on a waveform is `Looper.seek`**: a request the audio thread applies at the top of the
+  next block, where the playhead is read, and refuses during a recording. ✕ on the panel clears a
+  lane with content and removes an empty one; the first lane is never removed.
+- **Play and pause** are `Looper.playing`: paused, the lanes fade to silence and the playhead
+  holds, so play resumes rather than restarts; REC while paused starts the transport.
 - **Lanes outlive everything but the process**: the panel being hidden, the pop-out, the stream
   stopping, the rate changing. Loop off stops playback with a fade and keeps the audio. The session
   stores only whether the board was on; `Config` keeps the key bindings, the popped-out window's

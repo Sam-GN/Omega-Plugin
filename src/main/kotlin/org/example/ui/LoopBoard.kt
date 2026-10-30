@@ -128,6 +128,9 @@ class LoopBoard(
 
     private val ticker = Timer(33) { tick() }
 
+    /** Play and pause for the whole loop, under the lanes' button blocks and as wide as they are. */
+    private val playPause = Cube("PAUSE") { togglePlay() }
+
     /** Whether the board is in the stack. Popped out, the pop-out icon has nothing to do and is gone. */
     var docked: Boolean = true
         set(value) {
@@ -157,16 +160,31 @@ class LoopBoard(
         add(header, BorderLayout.NORTH)
         add(lanesPanel, BorderLayout.CENTER)
 
-        // The scrollbar sits under the waveforms only: a spacer the width of the controls keeps it
-        // off the buttons, so its left edge is the minute's zero like the waveforms' is.
+        // The bottom row: the transport under the lanes' button blocks, as wide as they are and
+        // aligned with them, and the scrollbar under the waveforms only, so its left edge is the
+        // minute's zero like the waveforms' is.
+        val transport = JPanel(null).apply {
+            isOpaque = false
+            preferredSize = Dimension(CONTROLS_WIDTH, CUBE_H)
+            playPause.setBounds(NUMBER_WIDTH + 4, 0, CUBE_W * 4 + CUBE_GAP * 3, CUBE_H)
+            add(playPause)
+        }
+        val scrollRow = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            val pad = (CUBE_H - 11) / 2
+            border = BorderFactory.createEmptyBorder(pad, 0, CUBE_H - 11 - pad, 0)
+            add(scroll, BorderLayout.CENTER)
+        }
         add(
             JPanel(BorderLayout()).apply {
                 isOpaque = false
-                border = BorderFactory.createEmptyBorder(2, CONTROLS_WIDTH + LANE_INSET, 0, LANE_INSET)
-                add(scroll, BorderLayout.CENTER)
+                border = BorderFactory.createEmptyBorder(BOTTOM_GAP, LANE_INSET, 0, LANE_INSET)
+                add(transport, BorderLayout.WEST)
+                add(scrollRow, BorderLayout.CENTER)
             },
             BorderLayout.SOUTH,
         )
+        syncPlay()
         rebuildRows()
         installKeys()
     }
@@ -180,7 +198,31 @@ class LoopBoard(
     }
 
     override fun preferredHeightAt(available: Int): Int =
-        HEADER_PAD * 2 + 22 + looper.laneCount * (LANE_HEIGHT + LANE_GAP) + 2 + 11 + 4
+        HEADER_PAD * 2 + 22 + looper.laneCount * (LANE_HEIGHT + LANE_GAP) + BOTTOM_GAP + CUBE_H + 4
+
+    /**
+     * The transport. Paused, every lane fades to silence and the playhead holds; play resumes from
+     * there. Pausing ends a recording where it is, since there is nothing to record into a held
+     * loop, and REC while paused starts the transport again.
+     */
+    private fun togglePlay() {
+        if (looper.playing) {
+            stopAllRecording()
+            looper.playing = false
+            host.status("Loop paused. Play resumes from here.", Theme.TEXT_DIM)
+        } else {
+            looper.playing = true
+            host.status("Loop playing.", Theme.GOOD)
+        }
+        syncPlay()
+    }
+
+    private fun syncPlay() {
+        val playing = looper.playing
+        playPause.label = if (playing) "❚❚  PAUSE" else "▶  PLAY"
+        playPause.lit = playing
+        playPause.toolTipText = if (playing) "Pause the loop where it is" else "Play the loop from where it paused"
+    }
 
     override fun getPreferredSize(): Dimension = Dimension(960, preferredHeightAt(width))
 
@@ -212,12 +254,28 @@ class LoopBoard(
         val rate = looper.sampleRate
         val length = looper.loopLength
         readout.text = if (length == 0) {
-            if (looper.isRecording) "recording the first lane — it sets the loop" else "no loop yet — REC a lane to set one"
+            val first = looper.lanes.firstOrNull { it.recording }
+            if (first != null) {
+                // The first recording is the loop being measured, so the count runs as it goes.
+                String.format(
+                    java.util.Locale.ROOT,
+                    "recording lane %d — %.1f s, up to %d s; stop sets the loop",
+                    first.index + 1,
+                    first.recordedFrames / rate,
+                    Looper.MAX_SECONDS,
+                )
+            } else if (looper.isRecording) {
+                "recording the first lane — it sets the loop"
+            } else {
+                "no loop yet — REC a lane to set one"
+            }
         } else {
             val at = looper.position / rate
             val of = length / rate
-            String.format(java.util.Locale.ROOT, "%.1f s of %.1f s", at, of)
+            val where = String.format(java.util.Locale.ROOT, "%.1f s of %.1f s", at, of)
+            if (looper.playing) where else "paused at $where"
         }
+        if (playPause.lit != looper.playing) syncPlay()
         for (i in 0 until looper.laneCount) rows[i].refresh()
     }
 
@@ -397,8 +455,13 @@ class LoopBoard(
                 record.label = if (recording) "STOP" else "REC"
                 record.repaint()
             }
+            // ✕ means clear while there is something to clear and remove once there is not, so it
+            // follows the lane's contents as they come and go.
+            if (seenEmpty != lane.isEmpty) syncButtons()
             wave.refresh()
         }
+
+        private var seenEmpty = true
 
         fun syncKnob() {
             knobValue.text = lane.level.formatted()
@@ -407,9 +470,12 @@ class LoopBoard(
         fun syncButtons() {
             val count = looper.laneCount
             // Both always there, so every lane's block is the same shape; the one that cannot be
-            // used here is dimmed rather than missing — the first lane cannot be removed, and a lane
-            // is added only at the bottom while there is room.
-            remove.dimmed = index == 0
+            // used here is dimmed rather than missing. ✕ clears a lane that holds something and
+            // removes one that is empty — except the first lane, which stays; a lane is added only
+            // at the bottom while there is room.
+            val empty = lane.isEmpty
+            seenEmpty = empty
+            remove.dimmed = index == 0 && empty
             addLane.dimmed = !(index == count - 1 && count < Looper.MAX_LANES)
             order.label = if (lane.order == LaneOrder.AFTER) "AFTER" else "THRU"
             order.toolTipText = if (lane.order == LaneOrder.AFTER) {
@@ -419,7 +485,11 @@ class LoopBoard(
             }
             active.lit = lane.active
             active.toolTipText = if (lane.active) "Lane ${index + 1} is heard — click to silence it" else "Lane ${index + 1} is silent — click to hear it"
-            remove.toolTipText = "Remove lane ${index + 1}"
+            remove.toolTipText = when {
+                !empty -> "Clear lane ${index + 1}"
+                index == 0 -> "Lane 1 is empty and stays"
+                else -> "Remove lane ${index + 1}"
+            }
             addLane.toolTipText = "Add a lane"
             save.toolTipText = "Save this lane as a WAV file"
             load.toolTipText = "Load a sound file into this lane — its first minute"
@@ -443,7 +513,22 @@ class LoopBoard(
             key.repaint()
         }
 
+        /** ✕: clears a lane that holds something; removes one that is already empty. */
         private fun removeLane() {
+            if (lane.recording || lane.armed) {
+                host.status("Stop the recording first.", Theme.BAD)
+                return
+            }
+            if (!lane.isEmpty) {
+                looper.clear(lane)
+                wave.invalidateCache()
+                syncButtons()
+                host.status(
+                    if (looper.loopLength == 0) "Lane ${index + 1} cleared. The loop is free again." else "Lane ${index + 1} cleared.",
+                    Theme.TEXT_DIM,
+                )
+                return
+            }
             if (looper.isRecording) {
                 host.status("Stop the recording before removing a lane.", Theme.BAD)
                 return
@@ -518,6 +603,11 @@ class LoopBoard(
                 host.status("Start the stream first — there is nothing to record until audio is running.", Theme.BAD)
                 return
             }
+            // A recording needs the transport running; REC while paused is a request to go.
+            if (!looper.playing) {
+                looper.playing = true
+                syncPlay()
+            }
             looper.arm(lane)
             wave.invalidateCache()
             host.status(
@@ -558,13 +648,29 @@ class LoopBoard(
 
             private val peaks = FloatArray(MINUTE_PIXELS * 2)
             private var cachedColumns = 0
+
+            /** The loudest sample seen in the cached columns; the picture is scaled so it reaches the top. */
+            private var loudest = 0f
             private var seenLength = -1
             private var seenSource: String? = null
             private var seenRecording = false
 
             init {
                 isOpaque = false
-                cursor = Cursor.getDefaultCursor()
+                cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
+                toolTipText = "Click to play from here"
+                addMouseListener(object : MouseAdapter() {
+                    override fun mousePressed(e: MouseEvent) {
+                        if (!SwingUtilities.isLeftMouseButton(e)) return
+                        seekTo(e.x)
+                    }
+                })
+                addMouseMotionListener(object : MouseAdapter() {
+                    // Dragging scrubs: the playhead follows the pointer until the button goes up.
+                    override fun mouseDragged(e: MouseEvent) {
+                        if (SwingUtilities.isLeftMouseButton(e)) seekTo(e.x)
+                    }
+                })
                 addMouseWheelListener { e ->
                     // The wheel over a waveform scrolls time, since there is nothing else to scroll
                     // here — unless the notch belongs to a scroll of the stack that brought the
@@ -582,8 +688,24 @@ class LoopBoard(
 
             fun invalidateCache() {
                 cachedColumns = 0
+                loudest = 0f
                 seenLength = -1
                 repaint()
+            }
+
+            /** Puts the playhead at the time under [x] of this waveform; every lane shares it. */
+            private fun seekTo(x: Int) {
+                if (looper.loopLength == 0) {
+                    host.status("No loop yet — REC a lane to set one.", Theme.BAD)
+                    return
+                }
+                if (looper.isRecording) {
+                    host.status("Stop the recording before moving the playhead.", Theme.BAD)
+                    return
+                }
+                val frame = ((x + scroll.value).toDouble() / PX_PER_SECOND * looper.sampleRate).roundToInt()
+                looper.seek(frame)
+                lanesPanel.repaint()
             }
 
             fun refresh() {
@@ -592,6 +714,7 @@ class LoopBoard(
                 val length = if (recording) l.recordedFrames else l.length
                 if (l.source !== seenSource || length < seenLength || recording != seenRecording) {
                     cachedColumns = 0
+                    loudest = 0f
                 }
                 seenSource = l.source
                 seenLength = length
@@ -623,6 +746,8 @@ class LoopBoard(
                     }
                     peaks[column * 2] = lo
                     peaks[column * 2 + 1] = hi
+                    if (hi > loudest) loudest = hi
+                    if (-lo > loudest) loudest = -lo
                     column++
                 }
                 cachedColumns = column
@@ -675,7 +800,10 @@ class LoopBoard(
                             else -> Theme.TEXT_DIM
                         }
                         val mid = h / 2f
-                        val scale = (h / 2f - 6f)
+                        // Scaled to the lane's own loudest sample, so a quiet take fills the lane
+                        // as a loud one does and the shape is what is seen, not the level. A floor
+                        // keeps near-silence from being blown up into noise.
+                        val scale = (h / 2f - 6f) / max(loudest, QUIET_FLOOR)
                         val firstColumn = offset.coerceAtLeast(0)
                         val lastColumn = min(offset + w, cachedColumns)
                         for (column in firstColumn until lastColumn) {
@@ -721,7 +849,11 @@ class LoopBoard(
      * progress, and [outlined] for something waiting — an arm, or a key binding. Hover warms the
      * fill as every other button here does.
      */
-    private class Cube(label: String, private val danger: Boolean = false, private val onClick: () -> Unit) : JComponent() {
+    private class Cube(
+        label: String,
+        private val danger: Boolean = false,
+        private val onClick: () -> Unit,
+    ) : JComponent() {
 
         var label: String = label
             set(value) {
@@ -800,8 +932,15 @@ class LoopBoard(
     }
 
     companion object {
-        /** How a minute is drawn: thirty pixels a second, so the whole of it is 1800 pixels wide. */
-        const val PX_PER_SECOND = 30
+        /**
+         * How a minute is drawn: ninety pixels a second, so the whole of it is 5400 pixels wide.
+         * Thirty was too coarse — a column held nearly fifteen hundred samples and a guitar's picking
+         * averaged into a smooth band; at ninety the attacks and the gaps between them show.
+         */
+        const val PX_PER_SECOND = 90
+
+        /** The quietest "loudest sample" a lane is scaled to; below it the picture is left small. */
+        const val QUIET_FLOOR = 0.05f
         const val MINUTE_PIXELS = PX_PER_SECOND * Looper.MAX_SECONDS
 
         const val LANE_HEIGHT = 84
@@ -812,6 +951,9 @@ class LoopBoard(
         const val CUBE_W = 46
         const val CUBE_H = 26
         const val CUBE_GAP = 4
+
+        /** Between the last lane and the bottom row. */
+        const val BOTTOM_GAP = 6
 
         /** How faint a cube is drawn when it cannot be used on its lane. */
         const val DIMMED_ALPHA = 0.3f

@@ -144,6 +144,14 @@ class Looper {
     @Volatile
     var enabled: Boolean = false
 
+    /**
+     * The transport: paused, every lane ramps to silence and the playhead holds where it is, so
+     * play resumes rather than restarts. Recording needs it running, and REC on the panel starts
+     * it. Distinct from [enabled], which is the loop board being there at all.
+     */
+    @Volatile
+    var playing: Boolean = true
+
     /** Frames in one pass of the loop, or zero while no lane has set it. */
     @Volatile
     var loopLength: Int = 0
@@ -228,6 +236,25 @@ class Looper {
     /** Whether any lane is recording or waiting to. */
     val isRecording: Boolean get() = lanes.any { it.recording || it.armed }
 
+    /** A playhead position the UI has asked for, applied by the audio thread at the next block; -1 for none. */
+    @Volatile
+    private var seekRequest = -1
+
+    /**
+     * Moves the playhead to [frame] of the loop: a click on a waveform. Applied at the top of the
+     * next block, where the playhead is read, so a block in flight is never torn; set directly as
+     * well, for the panel to show while no stream is running. Refused during a recording, whose
+     * lane is being written at the playhead and would be torn by it. Nothing to seek in without a
+     * loop.
+     */
+    fun seek(frame: Int) {
+        val length = loopLength
+        if (length == 0 || isRecording) return
+        val target = frame.coerceIn(0, length - 1)
+        seekRequest = target
+        position = target
+    }
+
     /** Empties [lane]. Frees the loop length when it was the last lane with anything in it. */
     fun clear(lane: Lane) {
         lane.stopRequested = lane.recording || lane.armed
@@ -311,8 +338,14 @@ class Looper {
                 lane.armed = false
             }
         }
-        running = enabled || sounding
-        if (!enabled) {
+        val requested = seekRequest
+        if (requested >= 0) {
+            seekRequest = -1
+            if (length > 0 && !isRecording) position = requested.coerceIn(0, length - 1)
+        }
+        val live = enabled && playing
+        running = live || sounding
+        if (!live) {
             blockStart = position
             wrapAt = -1
             return
@@ -364,7 +397,7 @@ class Looper {
      */
     fun finish(buffer: FloatArray, frames: Int) {
         if (!running) return
-        if (enabled) record(buffer, frames)
+        if (enabled && playing) record(buffer, frames)
         mix(buffer, frames, LaneOrder.AFTER)
         advance(frames)
     }
@@ -403,7 +436,8 @@ class Looper {
         for (li in lanes.indices) {
             val lane = lanes[li]
             if (lane.order != order) continue
-            val target = if (enabled && lane.active && !lane.recording && lane.length > 0) lane.targetGain() else 0f
+            val target =
+                if (enabled && playing && lane.active && !lane.recording && lane.length > 0) lane.targetGain() else 0f
             var g = lane.gain
             if (abs(target - g) < SNAP) g = target
             if (g == 0f && target == 0f) {

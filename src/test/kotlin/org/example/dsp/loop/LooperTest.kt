@@ -247,6 +247,55 @@ class LooperTest {
     }
 
     @Test
+    fun `paused, the lanes fade to silence and the playhead holds, and play resumes from there`() {
+        val looper = looper()
+        val lane = looper.lanes[0]
+        lane.level.value = 100f
+        looper.arm(lane)
+        repeat(4) { block(looper, 0.5f) }
+        looper.stopRecording(lane)
+        settle(looper)
+        looper.playing = false
+        val fading = block(looper, 0f)
+        assertTrue(abs(fading[0]) > 0f && abs(fading[0]) <= 0.5f, "a fade, not a cut: ${fading[0]}")
+        settle(looper)
+        assertEquals(0f, block(looper, 0f)[0])
+        val held = looper.position
+        block(looper, 0f)
+        assertEquals(held, looper.position, "the playhead holds while paused")
+        looper.playing = true
+        settle(looper)
+        assertTrue(looper.position != held, "and moves again on play")
+        assertEquals(0.5f, block(looper, 0f)[0], 1e-5f, "heard again")
+    }
+
+    @Test
+    fun `a seek moves the playhead at the next block, clamped to the loop, and never during a recording`() {
+        val looper = looper()
+        looper.arm(looper.lanes[0])
+        repeat(6) { block(looper, 0.1f) }
+        looper.stopRecording(looper.lanes[0])
+        block(looper, 0f)
+        val length = looper.loopLength
+
+        looper.seek(200)
+        assertEquals(200, looper.position, "shown at once, for a panel with no stream running")
+        block(looper, 0f)
+        assertEquals(200 + frames, looper.position, "applied at the top of the next block, then advanced")
+
+        looper.seek(length + 5_000)
+        block(looper, 0f)
+        assertEquals((length - 1 + frames) % length, looper.position, "clamped to the loop's last frame")
+
+        looper.arm(looper.lanes[1])
+        while (!looper.lanes[1].recording) block(looper, 0.2f)
+        val before = looper.position
+        looper.seek(0)
+        block(looper, 0.2f)
+        assertEquals((before + frames) % length, looper.position, "a seek during a recording is refused")
+    }
+
+    @Test
     fun `an inactive lane is silent, and a bound key could toggle it back`() {
         val looper = looper()
         val lane = looper.lanes[0]
