@@ -189,21 +189,25 @@ class ConfigTest {
         )
     }
 
-    /** Two boards, two eyes: closing one must not close the other, in either direction. */
+    /**
+     * The footswitch bindings and the loop window's place survive a restart. Key codes come back as
+     * integers although JSON only has one number type, and an installation that never bound a key
+     * reads as no bindings rather than as a failure.
+     */
     @Test
-    fun `each board's eye is remembered on its own`() {
-        assertFalse(Config(file).apply { load() }.hideDisabledModulesSecond, "the second board shows everything too")
+    fun `loop key bindings and the loop window's bounds are remembered`() {
+        val fresh = Config(file).apply { load() }
+        assertTrue(fresh.loopKeys.isEmpty(), "nothing bound on a fresh installation")
+        assertNull(fresh.loopWindowBounds, "never popped out")
+        assertFalse(fresh.loopPoppedOut)
 
-        Config(file).apply { load() }.hideDisabledModules = true
-        val afterFirst = Config(file).apply { load() }
-        assertTrue(afterFirst.hideDisabledModules)
-        assertFalse(afterFirst.hideDisabledModulesSecond, "closing the first eye must leave the second open")
-
-        Config(file).apply { load() }.hideDisabledModulesSecond = true
-        Config(file).apply { load() }.hideDisabledModules = false
-        val afterSecond = Config(file).apply { load() }
-        assertTrue(afterSecond.hideDisabledModulesSecond, "the second eye should have persisted")
-        assertFalse(afterSecond.hideDisabledModules, "and opening the first must leave it closed")
+        Config(file).apply { load() }.loopKeys = listOf(112, 0, 113, 0)
+        Config(file).apply { load() }.loopWindowBounds = "40,60,900,400"
+        Config(file).apply { load() }.loopPoppedOut = true
+        val again = Config(file).apply { load() }
+        assertEquals(listOf(112, 0, 113, 0), again.loopKeys)
+        assertEquals("40,60,900,400", again.loopWindowBounds)
+        assertTrue(again.loopPoppedOut)
     }
 
     /**

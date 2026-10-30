@@ -9,6 +9,56 @@ unverified, it says so.
 
 ---
 
+## [1.5.0-beta] — 2026-10-30
+
+### Added — a loop box
+
+A loop icon on a new strip above the boards opens the loop board: up to four lanes of a minute
+each, stacked above the pedal board, each with a waveform, a level knob and a block of square
+buttons. One horizontal scrollbar under them moves all four through the minute, and a playhead runs
+across them.
+
+- **REC** records a lane from the top of the loop and goes red; a second press, or Escape, Space or
+  Enter anywhere in the app, stops it. **The first lane you record sets the loop's length.** Every
+  lane after it waits for the top of the loop, starts there to the sample, and stops by itself when
+  the loop comes round. The length is free again once every lane is empty.
+- **What is recorded is the finished sound**, after the master and without the lanes already
+  playing, so a new lane never doubles an old one.
+- **ORDER** is where a lane plays back. `AFTER` is under the live guitar, as recorded. `THRU` is
+  into the start of the chain, ahead of both boards, so the pedals run over it again: record a riff
+  with the overdrive, then hear it through the delay, and change the delay while it loops.
+- **ON** is the lane's toggle, lit when it is heard. **KEY** waits for the next key and binds it to
+  that toggle, so a footswitch that acts as a keyboard works hands free; the binding is remembered,
+  and KEY then Escape clears it.
+  The three stop keys cannot be bound.
+- **SAVE** writes a lane as a mono float WAV, the recorder's format. **LOAD** takes any sound file
+  the JDK reads, mixes it to mono, keeps its first minute and converts it to the stream's rate.
+- **✕** removes a lane and **+** adds one at the bottom, up to four. Both are on every lane;
+  the one that cannot be used there — ✕ on the first lane, + anywhere but the last — is dimmed.
+  KEY followed by Escape clears a lane's binding.
+- **Pop-out**, at the loop board's right, moves it into a window of its own with the app's own
+  title bar — minimise, maximise, close — and remembers where you put it. Close brings it back into
+  the stack. Neither touches the audio.
+- **The lanes never go away** short of quitting. Loop off stops playback with a fade and keeps
+  every lane; stopping the stream keeps them; changing the sample rate resamples them.
+
+### Changed — a strip for the switches
+
+The eye, the loop and the fork now sit on a strip of their own between the top bars and the boards,
+drawn a size larger and spaced wider. The eye is one setting for both boards again, since a strip
+has one eye. Nothing on a board is pinned to the top of the window any more: a board's name and its
+LEVEL are part of the board and scroll with it.
+
+### Under the hood
+
+- `Looper` runs on the audio thread as three calls a block around the chain, allocating nothing:
+  every lane's buffer is sized in `prepare`, a minute at the stream's rate. The engine's allocation
+  test runs with three lanes playing and a fourth recording.
+- `--selftest --chain` carries the loop box the same way, so its cost is measured with the rest.
+- Seventeen new tests, 370 in all.
+
+---
+
 ## [1.4.2-beta] — 2026-10-30
 
 ### Changed — split mode arrives without moving anything

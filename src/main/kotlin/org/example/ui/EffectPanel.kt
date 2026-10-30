@@ -32,11 +32,14 @@ import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.geom.Arc2D
 import java.awt.geom.Ellipse2D
 import java.awt.geom.Path2D
 import java.awt.geom.RoundRectangle2D
 import javax.swing.BorderFactory
 import javax.swing.JComponent
+import kotlin.math.cos
+import kotlin.math.sin
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
@@ -192,7 +195,7 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
 
     /** A bare glyph on the header, left of whatever is already there. See [HeaderIcon]. */
     fun addHeaderIcon(kind: IconButton.Kind, tooltip: String, onClick: () -> Unit): IconButton {
-        val button = IconButton(kind, onClick).apply { toolTipText = tooltip }
+        val button = IconButton(kind, onClick = onClick).apply { toolTipText = tooltip }
         headerActions.add(button, 0)
         headerActions.revalidate()
         applyPreferredSize()
@@ -210,7 +213,14 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
      * Dim until the pointer is on it, then [hoverColour]. The default is the accent; [ClearButton]
      * overrides it to red, because that one throws something away and the rest do not.
      */
-    abstract class HeaderIcon(private val onClick: () -> Unit) : JComponent() {
+    abstract class HeaderIcon(
+        private val onClick: () -> Unit,
+        /**
+         * Drawn at [LARGE_SCALE] in a larger hit area, for the strip above the boards, where the
+         * glyphs stand on their own rather than beside a pedal's title and have room to be read.
+         */
+        private val large: Boolean = false,
+    ) : JComponent() {
 
         private var hover = false
 
@@ -218,7 +228,7 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
 
         init {
             cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-            val size = Dimension(16, 22)
+            val size = if (large) Dimension(26, 30) else Dimension(16, 22)
             preferredSize = size
             minimumSize = size
             maximumSize = size
@@ -239,6 +249,22 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
             })
         }
 
+        /**
+         * An icon that is hidden or taken out of the hierarchy is not under the pointer any more,
+         * whatever the last mouse event said. Swing sends no `mouseExited` to a component that
+         * vanishes beneath the cursor — the loop board's pop-out does exactly that to itself, and
+         * came back orange on pop-in until the next hover put it right.
+         */
+        override fun setVisible(visible: Boolean) {
+            if (!visible) hover = false
+            super.setVisible(visible)
+        }
+
+        override fun removeNotify() {
+            hover = false
+            super.removeNotify()
+        }
+
         /** Colour and stroke are already set; draw about [cx], [cy]. */
         protected abstract fun paintGlyph(g2: Graphics2D, cx: Int, cy: Int)
 
@@ -248,10 +274,22 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 g2.color = if (hover) hoverColour else Theme.TEXT_DIM
                 g2.stroke = BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                paintGlyph(g2, width / 2, height / 2)
+                if (large) {
+                    // Scaled about the centre, so the glyph code draws at one size and the strip's
+                    // copy is simply bigger — stroke included, which is what keeps its weight.
+                    g2.translate(width / 2.0, height / 2.0)
+                    g2.scale(LARGE_SCALE, LARGE_SCALE)
+                    paintGlyph(g2, 0, 0)
+                } else {
+                    paintGlyph(g2, width / 2, height / 2)
+                }
             } finally {
                 g2.dispose()
             }
+        }
+
+        private companion object {
+            const val LARGE_SCALE = 1.35
         }
     }
 
@@ -273,9 +311,9 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
      * [kind] is settable because the expander is one control with two states rather than two
      * controls — the glyph reverses to say that pressing it again undoes what it just did.
      */
-    class IconButton(kind: Kind, onClick: () -> Unit) : HeaderIcon(onClick) {
+    class IconButton(kind: Kind, large: Boolean = false, onClick: () -> Unit) : HeaderIcon(onClick, large) {
 
-        enum class Kind { ADD, EXPAND, COLLAPSE, EYE, EYE_CLOSED, SPLIT, SPLIT_OFF }
+        enum class Kind { ADD, EXPAND, COLLAPSE, EYE, EYE_CLOSED, SPLIT, SPLIT_OFF, LOOP, LOOP_OFF, POP_OUT }
 
         var kind: Kind = kind
             set(value) {
@@ -299,7 +337,48 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
                 Kind.EYE_CLOSED -> eye(g2, cx, cy, struck = true)
                 Kind.SPLIT -> fork(g2, cx, cy, struck = false)
                 Kind.SPLIT_OFF -> fork(g2, cx, cy, struck = true)
+                Kind.LOOP -> loop(g2, cx, cy, struck = false)
+                Kind.LOOP_OFF -> loop(g2, cx, cy, struck = true)
+                Kind.POP_OUT -> popOut(g2, cx, cy)
             }
+        }
+
+        /**
+         * A circle that comes back on itself, with an arrowhead where it closes: the loop box.
+         *
+         * Struck like the fork while it is off, for the same reason — the line says what is true now
+         * and pressing it removes it. The gap in the ring is where the arrow is, so the eye reads a
+         * cycle rather than a letter O.
+         */
+        private fun loop(g2: Graphics2D, cx: Int, cy: Int, struck: Boolean) {
+            val r = LOOP_RADIUS
+            g2.draw(Arc2D.Float(cx - r, cy - r, r * 2, r * 2, 50f, 290f, Arc2D.OPEN))
+            // The arrowhead, at the arc's end on the upper right, pointing along the circle.
+            val tipX = cx + r * cos(Math.toRadians(50.0)).toFloat()
+            val tipY = cy - r * sin(Math.toRadians(50.0)).toFloat()
+            val head = Path2D.Float()
+            head.moveTo(tipX - 4f, tipY - 1f)
+            head.lineTo(tipX, tipY)
+            head.lineTo(tipX + 0.5f, tipY + 4.5f)
+            g2.draw(head)
+            if (struck) g2.drawLine(cx - 7, cy + 7, cx + 7, cy - 7)
+        }
+
+        /** A window with an arrow leaving its corner: take this out into a window of its own. */
+        private fun popOut(g2: Graphics2D, cx: Int, cy: Int) {
+            val frame = Path2D.Float()
+            frame.moveTo(cx + 1f, cy - 6f)
+            frame.lineTo(cx - 6f, cy - 6f)
+            frame.lineTo(cx - 6f, cy + 6f)
+            frame.lineTo(cx + 6f, cy + 6f)
+            frame.lineTo(cx + 6f, cy - 1f)
+            g2.draw(frame)
+            g2.drawLine(cx - 1, cy + 1, cx + 7, cy - 7)
+            val head = Path2D.Float()
+            head.moveTo(cx + 2f, cy - 7f)
+            head.lineTo(cx + 7f, cy - 7f)
+            head.lineTo(cx + 7f, cy - 2f)
+            g2.draw(head)
         }
 
         /**
@@ -382,6 +461,9 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
 
             /** How far each arm sits from the centre line. */
             const val FORK_SPREAD = 5f
+
+            /** The loop ring's radius, sized to sit between the eye and the fork as their equal. */
+            const val LOOP_RADIUS = 6.5f
         }
     }
 

@@ -60,9 +60,15 @@ on one laptop, and no guitar interface has been tried there yet.
   `NAM` and `IR` pedals. None ship with the program. Without either, the `AMP` pedal's dropdown
   gives you an amplifier family and the `IR` pedal's dropdown a synthesised cabinet — voicings of
   the real things rather than models of them, and a capture of a real amp beats the voicing.
-- The fork beside the eye at the board's top-left splits the board in two. Both boards play at once,
-  each with its own LEVEL in its header and its own eye, and the fork again puts the second away.
-  Two boards each carrying an amp capture need **256 frames** or more; the status line says so.
+- The strip above the board has three switches. The eye hides the pedals that are off. The fork
+  splits the board in two: both boards play at once, each with its own LEVEL in its header, and the
+  fork again puts the second away. Two boards each carrying an amp capture need **256 frames** or
+  more; the status line says so.
+- The loop between them opens the loop box above the boards: up to four lanes of a minute each.
+  REC records a lane from the top of the loop — the first one you record sets the loop's length —
+  and ORDER says whether it plays back under your guitar or into the start of the chain, through the
+  pedals. SAVE and LOAD take a lane to and from a WAV file, KEY binds a key or a footswitch to a
+  lane's ON, and the pop-out icon puts the whole loop box in a window of its own.
 
 ## Latency
 

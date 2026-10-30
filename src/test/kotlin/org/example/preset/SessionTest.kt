@@ -206,4 +206,18 @@ class SessionTest {
 
         assertNull(Session.fromJsonValue(Config.at(folder).session))
     }
+
+    /** The loop board's switch rides along; a session from before it existed reads as off. */
+    @Test
+    fun `the loop board's switch survives the trip, and an older session reads as off`() {
+        val on = Session(sound = sound(), edited = false, loop = true)
+        val back = Session.fromJsonValue(Json.parse(Json.write(on.toJsonValue())))
+        assertNotNull(back)
+        assertTrue(back.loop, "loop on should come back on")
+
+        val older = Session(sound = sound(), edited = false)
+        val json = Json.write(older.toJsonValue())
+        assertFalse(json.contains("\"loop\""), "a session with the loop off writes nothing about it")
+        assertFalse(Session.fromJsonValue(Json.parse(json))!!.loop)
+    }
 }

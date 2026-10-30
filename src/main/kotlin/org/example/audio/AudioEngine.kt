@@ -20,6 +20,7 @@
 package org.example.audio
 
 import org.example.dsp.EffectChain
+import org.example.dsp.loop.Looper
 import org.example.dsp.rhythm.Feels
 import org.example.dsp.rhythm.Transport
 import org.example.util.Log
@@ -64,6 +65,14 @@ class AudioEngine(
      * a master is a master and not an input trim, and so that one knob covers both boards.
      */
     private val post: EffectChain? = null,
+    /**
+     * The loop box, or null where there is none, which is every headless caller but `--chain`.
+     *
+     * Three calls a block, around the chain: its through-lanes are added to the input before the
+     * boards, and after the master it records the sum and adds its after-lanes. Prepared and warmed
+     * with the chain, for the same reason the second board is; idle, it costs a few volatile reads.
+     */
+    val looper: Looper? = null,
 ) : AudioCallback {
 
     private val chains: List<EffectChain> = listOfNotNull(chain, second, post)
@@ -346,6 +355,9 @@ class AudioEngine(
             c.reset()
         }
         if (scratch.size < format.bufferFrames) scratch = FloatArray(format.bufferFrames)
+        // The lanes are allocated here, once per rate, and resampled rather than dropped when the
+        // rate changes: a loop outlives the stream it was recorded through.
+        looper?.prepare(format.sampleRate.toFloat())
         blendSmoothing = 1f - exp(-1f / (format.sampleRate * BLEND_SECONDS))
         // A fresh stream starts the second board from silence and fades it in if split is on, the
         // same way it would have arrived had the switch been pressed after Start.
@@ -392,7 +404,7 @@ class AudioEngine(
         // Transport is in the set because it runs on the audio thread and is not in the chain, so
         // nothing else here would ever record it as warmed.
         val classes = effects.map { it.javaClass } + reserves.map { it.javaClass } +
-            Transport::class.java
+            Transport::class.java + listOfNotNull(looper?.javaClass)
 
         val cold = !warmedClasses.containsAll(classes)
         val blocks = if (cold) WARMUP_BLOCKS else REWARM_BLOCKS
@@ -457,6 +469,8 @@ class AudioEngine(
             warmUpReserveMillis = millisBetween(beforeReserves, System.nanoTime())
 
             warmUpRhythm(input, output, warmFrames, blocks)
+            // On a throwaway looper, so the real lanes are untouched; the methods are the same.
+            looper?.warmUp(output, warmFrames, blocks)
             // Only on a pass that completed. A warm-up that threw has not proved anything about the
             // classes it never reached, and claiming otherwise would skip the retry it needs.
             warmedClasses.addAll(classes)
@@ -546,19 +560,32 @@ class AudioEngine(
 
         try {
             System.arraycopy(input, 0, output, 0, frames)
-            chain.process(output, frames)
-            // The second board gets the same input, renders into its own buffer and is added to the
-            // first. Run while split is on and for as long afterwards as its fade-out takes; after
-            // that it costs nothing. The size check is the one guard a headless caller needs.
+            // The loop box's through-lanes join the guitar here, ahead of both boards, so a lane
+            // set to play through the pedals is processed by them exactly as the guitar is.
+            val loops = looper
+            if (loops != null) {
+                loops.begin(frames)
+                loops.mixThrough(output, frames)
+            }
+            // The second board gets the same input — guitar and through-lanes — renders into its
+            // own buffer and is added to the first. Run while split is on and for as long
+            // afterwards as its fade-out takes; after that it costs nothing. The size check is the
+            // one guard a headless caller needs.
             val b = second
-            if (b != null && (split || blend > 0f) && scratch.size >= frames) {
-                System.arraycopy(input, 0, scratch, 0, frames)
-                b.process(scratch, frames)
+            val runSecond = b != null && (split || blend > 0f) && scratch.size >= frames
+            if (runSecond) System.arraycopy(output, 0, scratch, 0, frames)
+            chain.process(output, frames)
+            if (runSecond) {
+                b!!.process(scratch, frames)
                 mixSecond(output, frames)
             }
             // The master, on the sum. After the fork, so one knob governs both boards and turning
             // it down changes how loud the sound is rather than how hard the drives are hit.
             post?.process(output, frames)
+            // The loop box records the finished sound here — after the master, before its own
+            // after-lanes are added, so a new lane never contains the ones already playing — and
+            // then adds those lanes under the guitar.
+            loops?.finish(output, frames)
             // Recorded *before* the clamp. The file is 32-bit float, which has headroom above
             // 0 dBFS, so a take driven into the clip keeps its peaks and can be pulled back down
             // later — capturing after the clamp would record the damage instead.

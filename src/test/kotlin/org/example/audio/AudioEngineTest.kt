@@ -22,6 +22,8 @@ package org.example.audio
 import org.example.dsp.AudioProcessor
 import org.example.dsp.EffectChain
 import org.example.dsp.Parameter
+import org.example.dsp.loop.LaneOrder
+import org.example.dsp.loop.Looper
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -324,6 +326,73 @@ class AudioEngineTest {
             "render() allocated $allocated bytes over 20 000 split blocks; the callback path must not allocate",
         )
     }
+
+    // ---- loop mode -----------------------------------------------------------
+
+    @Test
+    fun `the loop box is around the chain - through-lanes before it, after-lanes and the recording after the master`() {
+        val looper = Looper()
+        looper.prepare(4_096f) // a small lane, so the first recording fills and sets the loop quickly
+        looper.enabled = true
+        val engine = AudioEngine(EffectChain(listOf(Gainer(0.5f))), post = EffectChain(listOf(Gainer(0.5f))), looper = looper)
+        val input = FloatArray(64) { 0.8f }
+        val output = FloatArray(64)
+
+        // Record the first lane: what it captures is the input through both gains, 0.2.
+        looper.arm(looper.lanes[0])
+        repeat(8) { engine.render(input, output, 64) }
+        looper.stopRecording(looper.lanes[0])
+        engine.render(input, output, 64)
+        assertEquals(0.2f, looper.lanes[0].buffer[10], 1e-6f, "recorded after the master")
+
+        // Played after the master at unity, it adds its 0.2 to the live 0.2.
+        looper.lanes[0].level.value = 100f
+        repeat(400) { engine.render(input, output, 64) }
+        assertEquals(0.4f, output[0], 1e-3f, "after: live plus lane")
+
+        // Played through the boards, the lane is halved twice like the guitar: 0.2 + 0.05.
+        looper.lanes[0].order = LaneOrder.THROUGH
+        repeat(400) { engine.render(input, output, 64) }
+        assertEquals(0.25f, output[0], 1e-3f, "through: the lane went through the chain and the master")
+    }
+
+    @Test
+    fun `render with the loop box playing and recording does not allocate`() {
+        val looper = Looper()
+        looper.prepare(44_100f)
+        looper.enabled = true
+        looper.laneCount = 4
+        val engine = splitEngineWithLooper(looper)
+        engine.split = true
+        val input = FloatArray(256) { kotlin.math.sin(it * 0.05).toFloat() }
+        val output = FloatArray(256)
+        // The fourth lane first, with no loop yet, so it starts recording at once; the three loaded
+        // lanes then set the loop at a full minute, which is longer than this test renders, so the
+        // recording runs through the whole measurement.
+        looper.arm(looper.lanes[3])
+        engine.render(input, output, 256)
+        val noise = FloatArray(looper.capacity) { kotlin.math.sin(it * 0.01).toFloat() * 0.1f }
+        for (i in 0 until 3) looper.load(looper.lanes[i], noise, noise.size, "test")
+        looper.lanes[2].order = LaneOrder.THROUGH
+        repeat(2_000) { engine.render(input, output, 256) }
+        assertTrue(looper.lanes[3].recording, "the fourth lane should be recording throughout")
+
+        val before = allocatedBytes()
+        if (before < 0) return
+        repeat(20_000) { engine.render(input, output, 256) }
+        val allocated = allocatedBytes() - before
+        assertTrue(
+            allocated < 64 * 1024,
+            "render() allocated $allocated bytes over 20 000 loop blocks; the callback path must not allocate",
+        )
+    }
+
+    private fun splitEngineWithLooper(looper: Looper) = AudioEngine(
+        EffectChain(listOf(Gainer(1.5f))),
+        second = EffectChain(listOf(Doubler())),
+        post = EffectChain(listOf(Gainer(0.5f))),
+        looper = looper,
+    )
 
     private fun allocatedBytes(): Long = try {
         val bean = java.lang.management.ManagementFactory.getThreadMXBean()

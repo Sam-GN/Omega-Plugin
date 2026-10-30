@@ -52,6 +52,11 @@ data class Session(
      * someone else's rig — and 132 BPM is not part of a tone. It is where you left the practice room.
      */
     val rhythm: Rhythm? = null,
+    /**
+     * Whether the loop board was on. Its lanes are not stored — a minute of audio four times over
+     * is not a setting — so a restored session shows an empty loop board, open where it was left.
+     */
+    val loop: Boolean = false,
 ) {
 
     /**
@@ -113,6 +118,7 @@ data class Session(
         sampleRate?.let { this["sampleRate"] = it }
         bufferFrames?.let { this["bufferFrames"] = it }
         rhythm?.let { this["rhythm"] = it.toJsonValue() }
+        if (loop) this["loop"] = true
     }
 
     companion object {
@@ -136,6 +142,7 @@ data class Session(
                 sampleRate = whole(map["sampleRate"]),
                 bufferFrames = whole(map["bufferFrames"]),
                 rhythm = rhythm(map["rhythm"]),
+                loop = map["loop"] as? Boolean ?: false,
             )
         }
 

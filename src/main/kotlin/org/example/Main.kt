@@ -732,7 +732,13 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     } else {
         null
     }
-    val engine = AudioEngine(chain, second = second, post = post)
+    // The loop box, with --chain: three lanes of noise playing — one of them through the boards,
+    // which is the costlier path — and a fourth recording, which is every lane doing something at
+    // once and so the most the looper can cost. The lanes are filled after `engine.start`, because
+    // `prepare` is what sizes them for the rate the device granted.
+    val looper = if (pedals.isNotEmpty()) org.example.dsp.loop.Looper().apply { enabled = true } else null
+    if (looper != null) println("loop    : three lanes playing (one through the boards), a fourth recording")
+    val engine = AudioEngine(chain, second = second, post = post, looper = looper)
     engine.split = split
     engine.onError = { println("stream error: $it") }
 
@@ -781,6 +787,22 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
         engine.rhythm.level = 0f
         engine.rhythm.start()
         println("rhythm  : ${engine.rhythm.pattern.name} + click at 240 BPM, silent")
+    }
+    // The lanes, now that `prepare` has sized them for the device's rate. The fourth is armed first:
+    // with no loop yet it starts recording at the next callback and runs for the whole minute. The
+    // other three are then loaded with a minute of near-silent noise, the third through the boards,
+    // which sets the loop at that minute. Near silence, because two of them are heard.
+    if (looper != null) {
+        val frames = looper.capacity
+        looper.laneCount = 4
+        looper.arm(looper.lanes[3])
+        Thread.sleep(50)
+        val noise = FloatArray(frames) { i -> ((i * 2654435761L.toInt()) shr 8) * 1e-12f }
+        for (i in 0 until 3) {
+            looper.load(looper.lanes[i], noise, frames, "selftest")
+            looper.lanes[i].level.value = 10f
+        }
+        looper.lanes[2].order = org.example.dsp.loop.LaneOrder.THROUGH
     }
 
     // The pause behind the Start button, broken down. It is invisible from inside the application —

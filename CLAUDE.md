@@ -8,7 +8,9 @@ A standalone realtime guitar effects processor with a Swing GUI. Audio comes in 
 capture device, runs through a rearrangeable chain of pedals — gate, compressor, EQ, gain,
 overdrive, an amp capture, a cabinet, FX slots, delay, reverb — then a master volume, and goes back
 out to a selected playback device. **Split mode** adds a second board fed the same input and summed
-with the first. `docs/WhatsDone.md` records what has been delivered.
+with the first. **Loop mode** adds a loop box above the boards: four lanes of a minute, recorded
+after the master and played back either under the guitar or into the start of the chain.
+`docs/WhatsDone.md` records what has been delivered.
 
 Despite the name, this is **not** an IntelliJ Platform plugin — "plugin" here means a guitar effect.
 `build.gradle.kts` applies `kotlin("jvm")` and `application`; there is no `plugin.xml` and no
@@ -91,7 +93,9 @@ omega.sh --measure  [--backend=asio] [--buffer=128] <in> <out> [secs]
 - `--selftest` runs the real engine through the real seam. `--chain` enables every module that runs
   without a file on disk — everything but NAM, with the IR pedal on a synthesised cabinet and the
   amp on its four-stage voice — with the EQ's five bands all active and an FX slot set to Reverb,
-  which is the heaviest thing a slot can hold, plus the rhythm section running 16ths at 240 BPM. It is the only way the DSP cost gets measured; without it you are testing the
+  which is the heaviest thing a slot can hold, plus the rhythm section running 16ths at 240 BPM and
+  the loop box with three lanes playing (one through the boards) and a fourth recording. It is the
+  only way the DSP cost gets measured; without it you are testing the
   device path alone. **Keep it in step with the shipping chain**: it drifted to four pedals once and
   spent several versions quietly measuring less than half the app. `--split` runs that chain on a
   second board as well, summed, which is the application's split mode and its worst case without a
@@ -139,13 +143,18 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
     pedal the guitar passes *through*, and a click routed through the overdrive and the reverb would
     be absurd. `AudioEngine.render` mixes it in **after** `chain.process`. See "Adding to the rhythm
     section" below before touching it.
+  - **`dsp/loop/`** — the loop box. `Looper` is four `Lane`s and one playhead, driven by three calls
+    the engine makes around the chain each block; also not an `AudioProcessor`, because it touches
+    the signal in two places. See "Loop mode" below.
 - **`ui/`** — Swing. `Knob`, `ToggleSwitch`, `LevelMeter` and `BeatLamps` are custom-painted
   `JComponent`s; `EffectPanel` builds one pedal from any `AudioProcessor` by reflecting over its
   `parameters` list. `Board` is one pedal board — its effect instances, its `EffectChain`, its
   `ChainBoard`, and the per-board state that used to be fields of `MainWindow` (which file the NAM
-  loaded, which FX slot is first) — and exists twice, because of split mode. `BoardStack` holds one
-  or two of them in the scroll view. `MainWindow` keeps what there is one of: the master, the device
-  bar, the session, the presets.
+  loaded, which FX slot is first) — and exists twice, because of split mode. `BoardStack` holds the
+  `Stackable` panels in the scroll view: the `LoopBoard` above, the first board, the second board
+  below. `ToolStrip` is the band between the top bars and the stack with the eye, the loop and the
+  fork; `LoopWindow` is the frame the loop board moves into when popped out. `MainWindow` keeps what
+  there is one of: the master, the device bar, the session, the presets, the looper.
 
   **Borrowed components have to be opted in by name, one at a time.** The dark look is applied per
   instance — `DarkComboBoxUI.install(...)`, `DarkMenu.popup()`, `DarkTextField.style(...)` — not
@@ -410,16 +419,52 @@ A second `Board`, fed the same input and summed with the first. The rules it dep
 - **Two NAM captures want 256 frames.** One capture measured at 97.7 % of a 64-frame period. The
   window says so in the status line — on switching split on, on loading the capture, on stream
   start — and enforces nothing; `realtimeRatio` is the arbiter.
-- **Each board has its own eye**, `Config.hideDisabledModules` for the first and
-  `Config.hideDisabledModulesSecond` for the second. They were one setting at first; a person who
-  trims the first board to what is on may want the second whole.
-- **The lane the LEVEL sits in is there from the start.** `ChainBoard.laneHeight` sizes it for the
-  header's right end whether or not that is showing, so switching split on moves no pedal; the knob,
-  the board name and the second board fade in, and `BoardStack` glides the first board's rows to
-  their half rather than jumping them. The scroll pane keeps its bar's column reserved
-  (`VERTICAL_SCROLLBAR_ALWAYS`) and `SlimScrollBarUI` fades the thumb, because a bar added on
-  demand narrows the viewport and the centred rows lurch sideways by half of it. The fork is the
-  only way in and out — the second board has no ✕.
+- **The eye is one preference for both boards**, `Config.hideDisabledModules`, pressed on the
+  strip above them. 1.4.2 gave each board its own; 1.5.0 put the toggles on the strip and went back
+  to one, since a strip has one eye.
+- **Nothing on a board is pinned to the viewport.** A board's name and its LEVEL are part of the
+  board and scroll with it. The lane they sit in is there from the start: `ChainBoard.laneHeight`
+  sizes it for the header's right end whether or not that is showing, so switching split on moves
+  no pedal; the knob, the name and the second board fade in, and `BoardStack` scales each fading
+  panel's room with its alpha so the first board's rows glide rather than jump. The scroll pane
+  keeps its bar's column reserved (`VERTICAL_SCROLLBAR_ALWAYS`) and `SlimScrollBarUI` fades the
+  thumb, because a bar added on demand narrows the viewport and the centred rows lurch sideways by
+  half of it. The fork on the strip is the only way in and out — the second board has no ✕.
+
+### Loop mode
+
+A `Looper` of four `Lane`s, in the engine from the start like the second board, switched on and
+off by the loop icon on the strip. The `LoopBoard` is a view of it: a row per lane — ✕, +, SAVE,
+LOAD, REC, ORDER, KEY, ON as square buttons, a level knob, a waveform — and one horizontal
+scrollbar under them for the minute. Pop-out moves that panel into a `LoopWindow`; close moves it
+back. The rules it depends on:
+
+- **Recording always takes the finished sound**, after the master and *before* the looper adds its
+  own after-lanes, so a new lane never contains the ones already playing. ORDER is playback only:
+  `AFTER` adds the lane under the live guitar; `THROUGH` adds it to the input ahead of both boards,
+  so the pedals run over it again — record a riff with the overdrive, then put it through the delay.
+  A through-lane that is playing is in the sum and so in anything recorded meanwhile; a real rig
+  does the same, and it is documented rather than fought.
+- **One loop length**, `Looper.loopLength`, set by the first lane recorded (or loaded) and free again
+  when every lane is empty. A later lane is **armed** by REC and starts at the top of the loop,
+  sample-accurately: `begin` knows where in the block the playhead wraps and `finish` copies from
+  that sample. It stops by itself when it reaches the length. With no loop yet it starts at the next
+  block from frame zero. Esc, Space and Enter stop a recording from anywhere in the app and cannot be
+  bound to a lane.
+- **Three calls a block, no allocation, no lock**: `begin(frames)`, `mixThrough(buffer)` before the
+  chain, `finish(buffer)` after the master. Every lane's buffer is allocated in `prepare`, on the
+  opening thread, a minute at the stream's rate — about 92 MB for four at 96 kHz. A rate change
+  resamples the lanes offline with the chain's own `Resampler`; they are never dropped. The engine's
+  allocation test runs with the looper playing and recording.
+- **Lanes outlive everything but the process**: the panel being hidden, the pop-out, the stream
+  stopping, the rate changing. Loop off stops playback with a fade and keeps the audio. The session
+  stores only whether the board was on; `Config` keeps the key bindings, the popped-out window's
+  bounds and whether it was popped out at close.
+- **The warm-up runs the looper's paths on a throwaway instance** with tiny lanes, so the real lanes
+  are untouched and the methods are compiled before the stream starts.
+- **Lane files are mono float WAV** written by `LaneFiles`, the recorder's format; loading takes
+  anything the JDK decodes, mixes to mono, keeps the first minute and resamples to the stream's rate
+  off the audio thread. Nothing sampled ships; a lane is always the user's own audio.
 
 ### Adding to the rhythm section
 
@@ -620,7 +665,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-353 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+370 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
 it runs on Windows too. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
@@ -660,7 +705,15 @@ you worked out yourself, not against what the code currently returns:
   under 64 kB over 20 000 blocks**, measured with `getCurrentThreadAllocatedBytes` — a bytes
   assertion rather than a timing one, because allocation is what triggers the collection. The split
   tests sit beside those: an idle second board is never run, the sum arrives by a fade and leaves by
-  one, the post stage sees the sum, and the allocation bound holds with both boards running.
+  one, the post stage sees the sum, and the allocation bound holds with both boards running, and
+  again with the looper playing three lanes and recording a fourth.
+- **`LooperTest`** drives the loop box block by block as the engine does, against the rules rather
+  than the code: a lane recorded over `n` blocks is `n × frames` long and plays back the samples it
+  was given; the first lane sets the loop and a second waits for the top of it and stops at its
+  length; a wrap inside a block starts the recording at that sample; a through-lane is halved by a
+  chain that halves and an after-lane is not; off, the lanes fade and the playhead holds; a rate
+  change keeps a 100 Hz tone at 100 Hz. `LaneFilesTest` round-trips a lane through a WAV, cuts a
+  long file to a minute and converts a 48 kHz file to 96.
 
 Swing and everything that touches a driver are not unit-tested. Verify those with `--selftest`
 (add `--chain --stress` or the result means little), `--measure` if a lead is patched, and by

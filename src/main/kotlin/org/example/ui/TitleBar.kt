@@ -55,6 +55,12 @@ import javax.swing.JPopupMenu
 class TitleBar(
     private val frame: JFrame,
     title: String,
+    /**
+     * Whether the ☰ menu is there. The main window's bar has it; the loop board's own window has
+     * nothing to put in one, and an About and an Exit on a secondary window would be two more ways
+     * to do what the main window already does.
+     */
+    private val withMenu: Boolean = true,
     private val onClose: () -> Unit,
 ) : JPanel(BorderLayout()) {
 
@@ -132,7 +138,7 @@ class TitleBar(
                     JPanel(BorderLayout()).apply {
                         isOpaque = false
                         add(icon, BorderLayout.WEST)
-                        add(menuButton, BorderLayout.EAST)
+                        if (withMenu) add(menuButton, BorderLayout.EAST)
                     },
                     BorderLayout.WEST,
                 )

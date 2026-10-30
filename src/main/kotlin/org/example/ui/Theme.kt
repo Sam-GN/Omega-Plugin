@@ -36,6 +36,9 @@ object Theme {
     val BACKGROUND = Color(0x14, 0x16, 0x1A)
     val PANEL = Color(0x1E, 0x22, 0x28)
     val PANEL_RAISED = Color(0x27, 0x2C, 0x34)
+
+    /** The toggle strip between the top bars and the boards: a shade lighter than the bars. */
+    val STRIP = Color(0x23, 0x27, 0x2E)
     val TRACK = Color(0x3A, 0x41, 0x4C)
     val KNOB_BODY = Color(0x2C, 0x32, 0x3B)
 

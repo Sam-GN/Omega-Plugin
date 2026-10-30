@@ -40,7 +40,6 @@ import javax.swing.JPanel
 import javax.swing.JViewport
 import javax.swing.Scrollable
 import javax.swing.SwingUtilities
-import javax.swing.event.ChangeListener
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -61,7 +60,7 @@ import kotlin.math.sin
  * and the drag hit-testing both need to know which row a pedal ended up in and which way that row
  * flows.
  */
-class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
+class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable, Stackable {
 
     /** Fired with the new signal order once a drag settles. */
     var onReorder: ((List<AudioProcessor>) -> Unit)? = null
@@ -97,25 +96,12 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         set(value) {
             if (field == value) return
             field = value
-            eye.kind = if (value) {
-                EffectPanel.IconButton.Kind.EYE_CLOSED
-            } else {
-                EffectPanel.IconButton.Kind.EYE
-            }
-            eye.toolTipText = if (value) {
-                "Show the pedals that are switched off"
-            } else {
-                "Hide the pedals that are switched off"
-            }
             // Setting the eye either way is an unambiguous statement about every pedal on the
-            // board, so nothing stays exempt from it.
+            // board, so nothing stays exempt from it. The eye itself is on the strip above the
+            // boards, one for both of them; the window sets this on each.
             exempt.clear()
             refreshVisibility()
-            onHideDisabledChanged?.invoke(value)
         }
-
-    /** Fired when the eye is pressed, so the choice can be remembered across runs. */
-    var onHideDisabledChanged: ((Boolean) -> Unit)? = null
 
     /** Currently being faded out, or already gone. Excluded from [wrap] and from the cable run. */
     private var concealed: Set<EffectPanel> = emptySet()
@@ -152,13 +138,13 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
      */
     private val ghosts = mutableListOf<EffectPanel>()
 
-    private val eye = EffectPanel.IconButton(EffectPanel.IconButton.Kind.EYE) { toggleHideDisabled() }
-        .apply { toolTipText = "Hide the pedals that are switched off" }
-
     /**
-     * The header lane's two ends. Whatever the window adds here is pinned to the top of the board,
-     * beside the eye on the left and against the far edge on the right, and stays in view when the
-     * board scrolls — the same treatment the eye has always had.
+     * The header lane's two ends: the board's own strip along its top, part of the board and
+     * scrolling with it. Whatever the window adds here sits at the left and at the far right.
+     *
+     * Nothing in here is pinned to the viewport any more. The eye and the fork moved to the strip
+     * above the boards in 1.5.0; what is left — a board's name and its LEVEL — belongs to the board
+     * and goes where the board goes.
      *
      * The right end grows the lane to fit what it holds, **whether or not it is showing**. It holds
      * the LEVEL knob, which is only seen in split mode, and the lane used to be sized for it only
@@ -232,8 +218,7 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
 
     /**
      * Opaque in the board's own background colour. Invisible while the header sits in its lane, and
-     * what keeps the controls legible when the board has scrolled a row of pedals up underneath
-     * them — see [raiseHeader] for the other half of that.
+     * what keeps the controls legible should a lifted pedal pass under them — see [raiseHeader].
      */
     private fun JPanel.backed() {
         isOpaque = true
@@ -246,17 +231,13 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
      * Applied in [paint] so the pedals, the cables and the header all go together; see
      * [EffectPanel.fade] for why `paintComponent` would not do.
      */
-    var alpha: Float = 1f
+    override var alpha: Float = 1f
         set(value) {
             val clamped = value.coerceIn(0f, 1f)
             if (field == clamped) return
             field = clamped
             repaint()
         }
-
-    private fun toggleHideDisabled() {
-        hideDisabled = !hideDisabled
-    }
 
     /**
      * Recomputes what should be on the board, and starts the animation that gets it there.
@@ -361,7 +342,6 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
     init {
         isOpaque = false
         panels.forEach { attach(it) }
-        headerLeft.add(eye)
         add(headerLeft)
         add(headerRight)
         applyCursors()
@@ -552,21 +532,19 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         }
 
     /**
-     * Pins the header to the top of what is actually on screen.
+     * Lays the header's two ends into the lane along the board's top.
      *
-     * The board is taller than its viewport whenever the chain needs more rows than fit, and a
-     * control that scrolls off the top is a control you have to go looking for to undo what it did.
-     * The right end is kept inside the board's own height, so on a short board below a tall one it
-     * does not float up over its neighbour.
+     * Part of the board: it scrolls with the pedals. It used to be pinned to the viewport's top so
+     * the eye stayed in reach while a tall board scrolled; the eye now lives on the strip above the
+     * boards and nothing left here needs to follow the viewport.
      */
     private fun placeHeader() {
-        val top = visibleTop()
         val left = headerLeft.preferredSize
-        headerLeft.setBounds(EYE_LEFT, top + EYE_TOP, left.width, left.height)
+        headerLeft.setBounds(HEADER_LEFT, HEADER_TOP, left.width, left.height)
         val right = headerRight.preferredSize
         headerRight.setBounds(
             width - right.width - HEADER_RIGHT,
-            top + ((laneHeight() - right.height) / 2).coerceAtLeast(0),
+            ((laneHeight() - right.height) / 2).coerceAtLeast(0),
             right.width,
             right.height,
         )
@@ -577,55 +555,12 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
      * Puts the header above every pedal in the stacking order.
      *
      * Swing paints a container's children from the highest index down, so a child added last is
-     * painted first — underneath. The header was added after the pedals and sat beneath them, which
-     * nobody saw while it stayed in its lane and everybody saw once the board scrolled: a pinned
-     * control that the pedals slide over is a control that disappears exactly when it is needed.
-     * Index 0 is painted last. A lifted pedal takes index 0 for the length of its drag and the next
-     * layout, or the drop itself, puts the header back on top.
+     * painted first — underneath. Index 0 is painted last. A lifted pedal takes index 0 for the
+     * length of its drag and the next layout, or the drop itself, puts the header back on top.
      */
     private fun raiseHeader() {
         setComponentZOrder(headerRight, 0)
         setComponentZOrder(headerLeft, 0)
-    }
-
-    /**
-     * Where the viewport's top edge falls in this board's coordinates, clamped to the board.
-     *
-     * The board used to be the viewport's child and read `viewPosition` directly. It now sits inside
-     * a stack of boards, so the position has to be translated through whatever is in between — and
-     * when this board is scrolled entirely off the top, the header stays at its last row rather than
-     * following the viewport out of the board.
-     */
-    private fun visibleTop(): Int {
-        val viewport = SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport
-            ?: return 0
-        val view = viewport.view ?: return 0
-        val top = SwingUtilities.convertPoint(view, 0, viewport.viewPosition.y, this).y
-        return top.coerceIn(0, (height - laneHeight()).coerceAtLeast(0))
-    }
-
-    private val viewportListener = ChangeListener {
-        placeHeader()
-        repaint()
-    }
-    private var watchedViewport: JViewport? = null
-
-    override fun addNotify() {
-        super.addNotify()
-        // Scrolling moves the viewport without laying the board out again, so the header has to be
-        // told separately or it rides away with the content.
-        val viewport = SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport
-        if (viewport !== watchedViewport) {
-            watchedViewport?.removeChangeListener(viewportListener)
-            viewport?.addChangeListener(viewportListener)
-            watchedViewport = viewport
-        }
-    }
-
-    override fun removeNotify() {
-        watchedViewport?.removeChangeListener(viewportListener)
-        watchedViewport = null
-        super.removeNotify()
     }
 
     override fun getPreferredSize(): Dimension {
@@ -642,7 +577,7 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
      * Separate from [getPreferredSize] because the stack that holds two boards decides their widths
      * and has to ask about heights before it has laid anything out.
      */
-    fun preferredHeightAt(available: Int): Int {
+    override fun preferredHeightAt(available: Int): Int {
         val grouped = wrap(available)
         val rows = grouped.size * pedalHeight() + (grouped.size - 1).coerceAtLeast(0) * ROW_GAP
         // The header's lane is claimed at both ends, not just the top. [computeSlots] centres the
@@ -1088,23 +1023,9 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable {
         /** The strip along the top the eye lives in, which no pedal is laid out into. */
         const val TOP_LANE = 26
 
-        /**
-         * Where the eye's *component* goes, chosen so the eye it *draws* is inset equally from the
-         * top and the left.
-         *
-         * They are this far apart because the component does not match its contents. It is 16 × 22
-         * like every other header glyph, so all of them share a hit area — but the lens inside is
-         * nearly the full width and barely a third of the height, which leaves a fraction of a pixel
-         * of slack at its left and about eight at its top. Setting both offsets to the same number
-         * is what put the eye against the left edge.
-         *
-         * The height is smaller than the drawing code looks: a quadratic Bézier reaches only **half**
-         * the offset of its control point, so the lid control draws an apex only half as high.
-         * Measured at 6× zoom rather than trusted — the arithmetic was wrong twice — and it has to
-         * be measured again whenever the glyph's height changes, which opening the eye did.
-         */
-        const val EYE_LEFT = 10
-        const val EYE_TOP = 4
+        /** Where the header's left end goes: the board's name, inset from the corner. */
+        const val HEADER_LEFT = 14
+        const val HEADER_TOP = 6
 
         /** Between the header's controls, and between the right end and the board's edge. */
         const val HEADER_GAP = 6

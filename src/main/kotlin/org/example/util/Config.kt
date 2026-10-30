@@ -108,9 +108,7 @@ class Config(private val file: Path) {
      * Defaults to showing everything. A board that opened with pedals missing, on an installation
      * whose owner had forgotten the setting existed, would read as pedals that had been lost.
      *
-     * One per board. The second board, split mode's, has [hideDisabledModulesSecond]: the two eyes
-     * were one setting at first, and a person trimming the first board to what is on wanted the
-     * second left whole.
+     * One setting for both boards: the eye is on the strip above them, not on either.
      */
     var hideDisabledModules: Boolean
         get() = values[HIDE_DISABLED] as? Boolean ?: false
@@ -119,11 +117,35 @@ class Config(private val file: Path) {
             save()
         }
 
-    /** The second board's eye; see [hideDisabledModules]. */
-    var hideDisabledModulesSecond: Boolean
-        get() = values[HIDE_DISABLED_SECOND] as? Boolean ?: false
+    /**
+     * The key bound to each loop lane's active toggle, by lane position, as AWT key codes; zero for
+     * none. Settings rather than session because it describes the footswitch on this desk, which
+     * is the same whatever sound is loaded.
+     */
+    var loopKeys: List<Int>
+        get() = (values[LOOP_KEYS] as? List<*>)?.map { (it as? Double)?.toInt() ?: (it as? Int) ?: 0 }
+            ?: emptyList()
         set(value) {
-            values[HIDE_DISABLED_SECOND] = value
+            values[LOOP_KEYS] = value
+            save()
+        }
+
+    /**
+     * Where the popped-out loop window was last, as `x,y,width,height`, or null when it has never
+     * been popped out. Remembered so it comes back on the same screen it was put on.
+     */
+    var loopWindowBounds: String?
+        get() = values[LOOP_WINDOW] as? String
+        set(value) {
+            if (value == null) values.remove(LOOP_WINDOW) else values[LOOP_WINDOW] = value
+            save()
+        }
+
+    /** Whether the loop board was popped out when the application last closed. */
+    var loopPoppedOut: Boolean
+        get() = values[LOOP_POPPED] as? Boolean ?: false
+        set(value) {
+            values[LOOP_POPPED] = value
             save()
         }
 
@@ -218,7 +240,9 @@ class Config(private val file: Path) {
         private const val SESSION = "session"
         private const val LOGGING = "loggingEnabled"
         private const val HIDE_DISABLED = "hideDisabledModules"
-        private const val HIDE_DISABLED_SECOND = "hideDisabledModulesSecond"
+        private const val LOOP_KEYS = "loopKeys"
+        private const val LOOP_WINDOW = "loopWindowBounds"
+        private const val LOOP_POPPED = "loopPoppedOut"
 
         fun default(): Config = at(org.example.preset.PresetStore.defaultFolder())
 

@@ -37,6 +37,7 @@ import org.example.dsp.rhythm.Pattern
 import org.example.dsp.rhythm.TimeSignature
 import org.example.dsp.rhythm.Transport
 import org.example.dsp.EffectChain
+import org.example.dsp.loop.Looper
 import org.example.dsp.MasterVolume
 import org.example.preset.Preset
 import org.example.preset.PresetStore
@@ -47,6 +48,7 @@ import java.awt.Component
 import java.awt.Desktop
 import java.awt.Dimension
 import java.awt.FileDialog
+import java.io.File
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.GridBagConstraints
@@ -112,10 +114,18 @@ class MainWindow : JFrame("Omega-Plugin") {
     private val board = Board(this, boardHost)
     private val board2 = Board(this, boardHost)
 
+    /**
+     * The loop box. One, in the engine from the start like the second board and for the same
+     * reason: loop mode is switched while the stream runs. Its lanes are allocated when the stream
+     * is first prepared and live as long as the process, whatever the board on screen is doing.
+     */
+    private val looper = Looper()
+
     private val engine = AudioEngine(
         board.chain,
         second = board2.chain,
         post = EffectChain(listOf(master)),
+        looper = looper,
     )
 
     private val stack = BoardStack(board.view)
@@ -123,13 +133,34 @@ class MainWindow : JFrame("Omega-Plugin") {
     /** Whether the second board is on. `engine.split` is the audio side of the same switch. */
     private var split = false
 
+    /** Whether the loop board is on. `looper.enabled` is the audio side of the same switch. */
+    private var loop = false
+
+    /** The loop board's own window while it is popped out, else null. */
+    private var loopWindow: LoopWindow? = null
+
     /**
-     * The fork beside the first board's eye. Struck while there is one board, like the eye is struck
-     * while pedals are hidden: the line says what is true now, and pressing it removes it.
+     * The strip above the boards: the eye, the loop and the fork. Each struck through while its
+     * thing is off — the line says what is true now, and pressing it removes it.
      */
-    private val splitButton = EffectPanel.IconButton(EffectPanel.IconButton.Kind.SPLIT_OFF) {
-        setSplit(!split)
-    }.apply { toolTipText = "Split into two boards" }
+    private val strip = ToolStrip(
+        onEye = { setHideDisabled(!config.hideDisabledModules) },
+        onLoop = { setLoop(!loop) },
+        onSplit = { setSplit(!split) },
+    )
+
+    private val loopHost = object : LoopBoard.Host {
+        override fun status(text: String, colour: java.awt.Color) = setStatus(text, colour)
+        override fun isStreaming(): Boolean = engine.isRunning
+        override fun chooseLaneToLoad(): File? = chooseLaneFile(load = true, suggested = "*.wav")
+        override fun chooseLaneToSave(suggested: String): File? = chooseLaneFile(load = false, suggested = suggested)
+        override fun keysChanged(keys: List<Int>) {
+            config.loopKeys = keys
+        }
+        override fun popOut() = popOutLoop()
+    }
+
+    private val loopBoard = LoopBoard(looper, loopHost)
 
     /** Which board is which, shown only once there are two. */
     private val boardLabel1 = label("BOARD 1")
@@ -514,7 +545,15 @@ class MainWindow : JFrame("Omega-Plugin") {
             background = Theme.BACKGROUND
             border = BorderFactory.createEmptyBorder(14, 16, 14, 16)
         }
-        root.add(buildTopBars(), BorderLayout.NORTH)
+        // The strip of board-wide switches sits under the top bars, above the boards, full width.
+        root.add(
+            JPanel(BorderLayout(0, 14)).apply {
+                isOpaque = false
+                add(buildTopBars(), BorderLayout.NORTH)
+                add(strip, BorderLayout.SOUTH)
+            },
+            BorderLayout.NORTH,
+        )
         // Scrolled, because a narrow window needs more rows than it has height for. The stack is
         // Scrollable and fills the viewport whenever it fits, so the thumb only appears when the
         // boards genuinely do not. The bar's column is reserved always, though: added on demand it
@@ -656,13 +695,9 @@ class MainWindow : JFrame("Omega-Plugin") {
             }
         }
 
-        // Each board's eye is its own preference, remembered on its own: the first board can be
-        // trimmed to what is on while the second shows everything. Restored before the listener is
-        // attached, so putting the saved value back does not count as a change and write it out again.
-        board.view.hideDisabled = config.hideDisabledModules
-        board.view.onHideDisabledChanged = { on -> config.hideDisabledModules = on }
-        board2.view.hideDisabled = config.hideDisabledModulesSecond
-        board2.view.onHideDisabledChanged = { on -> config.hideDisabledModulesSecond = on }
+        // The eye is one preference for both boards, on the strip above them, remembered once.
+        setHideDisabled(config.hideDisabledModules, remember = false)
+        loopBoard.setKeys(config.loopKeys)
 
         masterKnob.onChange = {
             updateMaster()
@@ -675,12 +710,9 @@ class MainWindow : JFrame("Omega-Plugin") {
         }
         updateMaster()
 
-        // The split fork sits beside the first board's eye and is the one way in and out of split
-        // mode. Each board's LEVEL lives at the right end of its own header, where it is unambiguously
-        // that board's. The LEVELs and the board names are split-only: the board fades them in and out
-        // with the second board, into a lane that has had room for them from the start.
-        board.view.headerLeft.add(splitButton)
-        // The names go last in the left end: eye, fork, BOARD 1 — the fork stays beside the eye.
+        // Each board's LEVEL lives at the right end of its own header, where it is unambiguously
+        // that board's, and its name at the left. Both are split-only: the board fades them in and
+        // out with the second board, into a lane that has had room for them from the start.
         board.view.headerLeft.add(board.view.splitOnly)
         board2.view.headerLeft.add(board2.view.splitOnly)
         board.view.splitOnly.add(boardLabel1)
@@ -1593,6 +1625,11 @@ class MainWindow : JFrame("Omega-Plugin") {
         // Before anything is torn down, while the combos still hold the selection they are being
         // asked about. A pending coalesced save is superseded rather than raced.
         saveSession()
+        // Where the loop board was, so it comes back there.
+        val popped = loopWindow
+        if (popped != null) config.loopWindowBounds = popped.boundsText()
+        config.loopPoppedOut = popped != null
+        popped?.dispose()
         // Closing the window mid-take must still finish the file, or the header never gets its
         // lengths and the recording opens as empty.
         finishRecording()
@@ -1646,9 +1683,7 @@ class MainWindow : JFrame("Omega-Plugin") {
             board.level.active = false
             board2.level.active = false
         }
-        splitButton.kind =
-            if (on) EffectPanel.IconButton.Kind.SPLIT else EffectPanel.IconButton.Kind.SPLIT_OFF
-        splitButton.toolTipText = if (on) "Back to one board" else "Split into two boards"
+        strip.setSplit(on)
         board.view.showSplitControls(on)
         board2.view.showSplitControls(on)
         if (on) stack.showSecond(board2.view) else stack.hideSecond()
@@ -1665,6 +1700,94 @@ class MainWindow : JFrame("Omega-Plugin") {
             )
             else -> setStatus("Split off. The second board keeps its settings until you quit.", Theme.TEXT_DIM)
         }
+    }
+
+    // ------------------------------------------------------------------- loop
+
+    /**
+     * Switches the loop board in or out.
+     *
+     * Allowed while the stream runs, like split: the looper is always in the engine, prepared and
+     * warmed, and switching it is one volatile store it answers with a fade. Off, the board goes
+     * away and playback stops, but the lanes keep their audio until the process ends — see
+     * `Looper`. Popping the board in or out is never audible; this is.
+     */
+    private fun setLoop(on: Boolean, fromUser: Boolean = true) {
+        if (loop == on) return
+        loop = on
+        strip.setLoop(on)
+        if (on) {
+            looper.enabled = true
+            loopBoard.alpha = 0f
+            loopBoard.docked = true
+            stack.showAbove(loopBoard, loopBoard)
+        } else {
+            loopBoard.stopAllRecording()
+            looper.enabled = false
+            val window = loopWindow
+            if (window != null) {
+                config.loopWindowBounds = window.boundsText()
+                window.dispose()
+                loopWindow = null
+                loopBoard.docked = true
+            } else {
+                stack.hideAbove()
+            }
+        }
+        touchSession()
+        if (!fromUser) return
+        setStatus(
+            if (on) {
+                "Loop board on. REC a lane to set the loop; every lane after it records from the top of it."
+            } else {
+                "Loop board off. The lanes keep what they hold until you quit."
+            },
+            if (on) Theme.GOOD else Theme.TEXT_DIM,
+        )
+    }
+
+    /** Takes the loop board out of the stack into a window of its own. */
+    private fun popOutLoop() {
+        if (loopWindow != null || !loop) return
+        stack.detachAbove()
+        loopBoard.alpha = 1f
+        loopBoard.docked = false
+        val window = LoopWindow(loopBoard, LoopWindow.parseBounds(config.loopWindowBounds)) { popInLoop() }
+        loopWindow = window
+        window.isVisible = true
+    }
+
+    /** Brings the loop board back from its window into the stack. The audio never notices. */
+    private fun popInLoop() {
+        val window = loopWindow ?: return
+        config.loopWindowBounds = window.boundsText()
+        loopWindow = null
+        window.dispose()
+        loopBoard.docked = true
+        if (loop) stack.showAbove(loopBoard, loopBoard)
+    }
+
+    /**
+     * The platform's file dialog for a lane, as every other picker here. Saving adds `.wav` when
+     * the name typed has no extension, since the file is a WAV whatever it is called.
+     */
+    private fun chooseLaneFile(load: Boolean, suggested: String): File? {
+        val owner: java.awt.Frame = loopWindow ?: this
+        val chooser = FileDialog(owner, if (load) "Load a lane" else "Save the lane", if (load) FileDialog.LOAD else FileDialog.SAVE)
+        chooser.file = suggested
+        chooser.isVisible = true
+        val directory = chooser.directory ?: return null
+        val name = chooser.file ?: return null
+        val named = if (!load && !name.contains('.')) "$name.wav" else name
+        return File(directory, named)
+    }
+
+    /** The eye: one preference for both boards, remembered unless this is the restore of it. */
+    private fun setHideDisabled(hidden: Boolean, remember: Boolean = true) {
+        board.view.hideDisabled = hidden
+        board2.view.hideDisabled = hidden
+        strip.setHidden(hidden)
+        if (remember) config.hideDisabledModules = hidden
     }
 
     /**
@@ -2698,6 +2821,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         sampleRate = rateCombo.selectedItem as? Int,
         bufferFrames = bufferCombo.selectedItem as? Int,
         rhythm = currentRhythm(),
+        loop = loop,
     )
 
     /**
@@ -2775,6 +2899,10 @@ class MainWindow : JFrame("Omega-Plugin") {
             // With the stream down, so a capture is never loaded into a running callback and its
             // warm-up costs nothing anyone hears.
             val missing = applySound(session.sound)
+            // The loop board comes back where it was left — in the stack, or in its own window —
+            // and empty: its lanes are audio, not settings.
+            setLoop(session.loop, fromUser = false)
+            if (session.loop && config.loopPoppedOut) popOutLoop()
 
             // The name is only claimed back if the preset is still on disk. Otherwise "Save" would
             // quietly recreate a preset that was deleted between runs — while the sound itself, which
