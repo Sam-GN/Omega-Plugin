@@ -128,6 +128,17 @@ class LoopBoard(
 
     private val ticker = Timer(33) { tick() }
 
+    /**
+     * Whether the time view is following the playhead: true while the playhead was in view at the
+     * last tick. The view then pages when the playhead runs off its right edge and jumps back when
+     * the loop wraps. A scroll the user makes, which moves the view rather than the playhead, drops
+     * the follow until the playhead is in view again — scrolled back to it, or come round to it.
+     */
+    private var following = false
+
+    /** The scroll value this board last set, so a change to it is known to be the user's. */
+    private var lastSetScroll = -1
+
     /** Play and pause for the whole loop, under the lanes' button blocks and as wide as they are. */
     private val playPause = Cube("PAUSE") { togglePlay() }
 
@@ -276,7 +287,42 @@ class LoopBoard(
             if (looper.playing) where else "paused at $where"
         }
         if (playPause.lit != looper.playing) syncPlay()
+        followPlayhead(length, rate)
         for (i in 0 until looper.laneCount) rows[i].refresh()
+    }
+
+    /**
+     * Keeps the playhead in the time view while it is there to be kept.
+     *
+     * Two things can take the playhead out of view: the playhead moving, or the view moving. Only
+     * the first is followed. A scroll the user made shows as a scroll value this board did not set,
+     * and that drops the follow — the user is looking somewhere else on purpose — until the
+     * playhead is in view again, by their scrolling back or by its coming round. Following, the
+     * view pages when the playhead runs off the right edge, so the picture is still under the
+     * pointer between pages, and jumps back when the loop wraps.
+     */
+    private fun followPlayhead(length: Int, rate: Float) {
+        val extent = scroll.model.extent
+        // No loop yet is still something to follow while the first lane records: the playhead is
+        // the front of that recording, running from the top at the same speed.
+        if ((length == 0 && !looper.isRecording) || extent <= 0) {
+            following = false
+            lastSetScroll = scroll.value
+            return
+        }
+        val px = (looper.position / rate * PX_PER_SECOND).roundToInt()
+        var value = scroll.value
+        val userScrolled = lastSetScroll >= 0 && value != lastSetScroll
+        val inView = px >= value && px < value + extent
+        if (userScrolled) {
+            following = inView
+        } else if (following && !inView) {
+            value = (px - FOLLOW_LEAD).coerceIn(0, max(0, MINUTE_PIXELS - extent))
+            scroll.value = value
+        } else {
+            following = inView
+        }
+        lastSetScroll = scroll.value
     }
 
     override fun addNotify() {
@@ -816,8 +862,9 @@ class LoopBoard(
                         }
                     }
 
-                    // The playhead, over everything, when there is a loop to be in.
-                    if (looper.loopLength > 0 && looper.enabled) {
+                    // The playhead, over everything, when there is a loop to be in — or a first
+                    // recording under way, whose front it is.
+                    if (looper.enabled && (looper.loopLength > 0 || looper.isRecording)) {
                         val x = (looper.position / rate * PX_PER_SECOND).roundToInt() - offset
                         if (x in 0 until w) {
                             g2.color = Theme.ACCENT
@@ -895,6 +942,19 @@ class LoopBoard(
             })
         }
 
+        // Hover is learnt from enter and exit alone, and a cube that leaves the tree under the
+        // pointer — the ✕ whose click removed its own lane — never gets the exit. The row is kept
+        // and comes back with the next +, so the stale hover has to be dropped here.
+        override fun removeNotify() {
+            hover = false
+            super.removeNotify()
+        }
+
+        override fun setVisible(visible: Boolean) {
+            if (!visible) hover = false
+            super.setVisible(visible)
+        }
+
         override fun paintComponent(g: Graphics) {
             val g2 = g.create() as Graphics2D
             try {
@@ -941,6 +1001,9 @@ class LoopBoard(
 
         /** The quietest "loudest sample" a lane is scaled to; below it the picture is left small. */
         const val QUIET_FLOOR = 0.05f
+
+        /** Where the playhead lands in the view after a page: a little in from the left edge. */
+        const val FOLLOW_LEAD = 48
         const val MINUTE_PIXELS = PX_PER_SECOND * Looper.MAX_SECONDS
 
         const val LANE_HEIGHT = 84

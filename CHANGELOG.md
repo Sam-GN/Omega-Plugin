@@ -9,6 +9,37 @@ unverified, it says so.
 
 ---
 
+## [1.5.8-beta] — 2026-10-30
+
+### Fixed — a new lane's ✕ no longer arrives lit
+
+Removing an empty lane with ✕ took the button out from under the pointer, so it never saw the mouse
+leave and kept its hover. Lane rows are kept and reused, and the next + brought that row back with
+its ✕ already red. A button now drops its hover when it leaves the tree or is hidden.
+
+---
+
+## [1.5.7-beta] — 2026-10-30
+
+### Changed — the view follows a recording too
+
+While the first lane records there is no loop yet, but there is a playhead: the front of the
+recording, running from the top. It is drawn now, and the time view follows it by the same rule as
+playback — paging forward while it is in view, left alone once you have scrolled elsewhere.
+
+---
+
+## [1.5.6-beta] — 2026-10-30
+
+### Added — the time view follows the playhead
+
+While the playhead is in view, the view keeps it there: it pages forward when the playhead runs
+off the right edge and jumps back when the loop comes round. Scroll away yourself and it stops
+following, since you are looking somewhere else on purpose, until the playhead is in view again —
+scrolled back to, or come round to.
+
+---
+
 ## [1.5.5-beta] — 2026-10-30
 
 ### Changed — the first recording counts as it goes; waveforms show their shape

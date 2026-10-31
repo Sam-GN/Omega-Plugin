@@ -678,7 +678,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-370 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+372 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
 it runs on Windows too. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
