@@ -9,6 +9,31 @@ unverified, it says so.
 
 ---
 
+## [1.6.2-beta] — 2026-10-30
+
+### Added — the opening
+
+The logo sits dead centre of the screen from the moment the application reaches its toolkit until
+the window has its first frame, then fades out as the window fades in behind it. Before, that half
+second was an empty window. The same logo is drawn on the same point by both the splash and the
+window's veil, so the eye sees one logo and a window forming around it. Only the GUI shows it; the
+diagnostics never do.
+
+---
+
+## [1.6.1-beta] — 2026-10-30
+
+### Fixed — the window opens in its final shape
+
+With the eye on, the first frames after launch showed the one remaining pedal growing out of the
+corner of the board with its title clipped, then the loop board fading in and pushing it off the
+bottom. Two startup steps were animating from a state nobody had seen: the eye was applied before
+the first layout, so that layout eased every pedal out of a point, and loop mode came back after
+the window was shown, through the same fade a click uses. Both now land without animation while the
+window is still being built, and the whole window comes in under a short fade instead.
+
+---
+
 ## [1.6.0-beta] — 2026-10-30
 
 ### Added — a 44.1 kHz input works with a 48 kHz output, and the other way round

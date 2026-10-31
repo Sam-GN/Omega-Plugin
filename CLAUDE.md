@@ -156,6 +156,18 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
   fork; `LoopWindow` is the frame the loop board moves into when popped out. `MainWindow` keeps what
   there is one of: the master, the device bar, the session, the presets, the looper.
 
+  **The window opens in its final shape.** Anything the saved session changes about the picture —
+  the eye, loop mode — is applied in the constructor with no animation (`refreshVisibility` snaps
+  while the board has no width; `setLoop(atOnce = true)`), because there is nothing on screen for
+  a fade to start from, and a fade that starts from nothing eases every pedal out of a point. The
+  sound itself is restored after the first paint, for the NAM warm-up. The entrance is the logo:
+  `Splash` holds it dead centre of the screen in a small frameless window from the moment `main`
+  reaches Swing, the window's glass-pane veil paints the same logo at the same point and lifts
+  over `VEIL_MILLIS`, logo out and window in, and the splash is dismissed on the veil's first tick,
+  not on `windowOpened`, which arrives while the event thread is still busy behind it. Both
+  surfaces draw through `Splash.paint`, which is what keeps them in register. Only the GUI path
+  shows it.
+
   **Borrowed components have to be opted in by name, one at a time.** The dark look is applied per
   instance — `DarkComboBoxUI.install(...)`, `DarkMenu.popup()`, `DarkTextField.style(...)` — not
   through UIManager keys, because Nimbus paints most controls through *painters* in its defaults that

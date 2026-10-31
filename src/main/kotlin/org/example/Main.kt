@@ -82,7 +82,21 @@ fun main(args: Array<String>) {
             SwingUtilities.invokeLater {
                 Theme.install()
                 org.example.ui.AppIcon.applyToTaskbar()
-                MainWindow().isVisible = true
+                // The logo, dead centre, for the half second the window takes to build; the window's
+                // veil then carries it and fades it out. Taken down if the window never arrives, or
+                // a failed start would leave a logo on the desktop with nothing behind it.
+                org.example.ui.Splash.show()
+                // On a second event, not this one: the splash is painted when the event thread
+                // next comes free, and building the window takes half a second of it. Shown and
+                // built in one event, the splash's first paint would land after the window's.
+                SwingUtilities.invokeLater {
+                    try {
+                        MainWindow().isVisible = true
+                    } catch (t: Throwable) {
+                        org.example.ui.Splash.dismiss()
+                        throw t
+                    }
+                }
             }
             return
         }

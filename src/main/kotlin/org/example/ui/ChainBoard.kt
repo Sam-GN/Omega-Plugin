@@ -257,6 +257,19 @@ class ChainBoard(effects: List<AudioProcessor>) : JPanel(null), Scrollable, Stac
         }
         if (next == concealed) return
         concealed = next
+        // Before the first layout there is nothing on screen to animate from: a fade started here
+        // would have the first layout ease every pedal out of a point at the origin, which with the
+        // eye on and one pedal left is a title growing out of the corner. Same guard as [addPedal]:
+        // with no width, the board simply appears in its final shape.
+        if (width == 0) {
+            for (panel in panels) {
+                val shown = panel !in concealed
+                panel.isVisible = shown
+                panel.fade = if (shown) 1f else 0f
+            }
+            revalidate()
+            return
+        }
         // Anything coming back has to be a component again before it can be seen to fade in.
         for (panel in panels) {
             if (panel !in concealed && !panel.isVisible) {

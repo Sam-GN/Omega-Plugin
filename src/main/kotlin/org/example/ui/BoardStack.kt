@@ -92,9 +92,18 @@ class BoardStack(private val first: ChainBoard) : JPanel(null), Scrollable {
     /** Fades the second board out; it leaves the hierarchy once it is gone. */
     fun hideSecond() = hide(below)
 
-    /** Brings [board] onto the stack above the first board, fading it in. */
-    fun showAbove(board: JComponent, stackable: Stackable) {
+    /**
+     * Brings [board] onto the stack above the first board, fading it in — or, with [atOnce], placing
+     * it at full strength with no animation, for a window that is being built and has not been seen
+     * yet: there is nothing on screen for a fade to start from.
+     */
+    fun showAbove(board: JComponent, stackable: Stackable, atOnce: Boolean = false) {
         above = place(above, board, stackable)
+        if (atOnce) {
+            stackable.alpha = 1f
+            animator.stop()
+            revalidate()
+        }
     }
 
     /** Fades the panel above out; it leaves the hierarchy once it is gone. */

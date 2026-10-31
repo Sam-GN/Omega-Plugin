@@ -404,6 +404,22 @@ class MainWindow : JFrame("Omega-Plugin") {
      */
     private val sessionSaver = Timer(SESSION_SAVE_DELAY_MS) { saveSession() }.apply { isRepeats = false }
 
+    /**
+     * A sheet of the background colour with the logo at its centre over the whole window, lifted
+     * over [VEIL_MILLIS] once the window has its first frame: the logo fades out as the application
+     * fades in behind it. The window is built in its final shape before it is shown — the eye and
+     * the loop board are applied with no animation, because there is nothing on screen for one to
+     * start from — so nothing is left to watch arrive, and this is only the entrance. It continues
+     * the [Splash], which has been holding the same logo at the same point of the screen since
+     * `main` reached Swing. Declared ahead of the constructor body that installs it, as Kotlin
+     * initialises in order.
+     */
+    private val veil = object : JComponent() {
+        var alpha = 1f
+
+        override fun paintComponent(g: java.awt.Graphics) = Splash.paint(g, width, height, alpha)
+    }
+
     private var recorder: Recorder? = null
 
     /** The optional " - drums" twin, open for exactly as long as [recorder] is. */
@@ -712,6 +728,18 @@ class MainWindow : JFrame("Omega-Plugin") {
         // The eye is one preference for both boards, on the strip above them, remembered once.
         setHideDisabled(config.hideDisabledModules, remember = false)
         loopBoard.setKeys(config.loopKeys)
+        // The loop board, too, is on before the window is seen rather than fading in after it: a
+        // user who left it on should find it there, not watch it push the pedals down. The sound
+        // itself still comes back after the first paint — see the note above `restoreSound`.
+        if (startupSession?.loop == true) {
+            // Under `restoring`, so this does not schedule a session write before the sound is back.
+            restoring = true
+            try {
+                setLoop(true, fromUser = false, atOnce = true)
+            } finally {
+                restoring = false
+            }
+        }
 
         masterKnob.onChange = {
             updateMaster()
@@ -743,6 +771,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         // Alt+F4 and a WM_CLOSE from outside still arrive here even without a native close button.
         addWindowListener(object : WindowAdapter() {
             override fun windowClosing(e: WindowEvent) = shutdown()
+            override fun windowOpened(e: WindowEvent) = liftVeil()
         })
 
         // The saved driver gets first refusal; if it is gone, this lands on the usual pick and says
@@ -763,6 +792,33 @@ class MainWindow : JFrame("Omega-Plugin") {
         // nothing visible. Ahead of the first paint that reads as an application that will not
         // start; behind it, as one that is still settling.
         if (startupSession != null) SwingUtilities.invokeLater { restoreSound(startupSession) }
+
+        // Under the veil until the window has opened; `windowOpened` lifts it.
+        glassPane = veil
+        veil.isVisible = true
+    }
+
+    private fun liftVeil() {
+        // The clock starts on the first tick, not here: `windowOpened` arrives while the event thread
+        // is still restoring the session behind the veil, and a clock started now would have run out
+        // before the first tick could paint — the veil would simply vanish, which it did.
+        var started = 0L
+        val timer = Timer(16, null)
+        timer.addActionListener {
+            if (started == 0L) {
+                started = System.nanoTime()
+                // The window has its first frame, with the same logo where the splash held it.
+                Splash.dismiss()
+            }
+            val t = ((System.nanoTime() - started) / 1_000_000.0 / VEIL_MILLIS).coerceIn(0.0, 1.0)
+            veil.alpha = (1.0 - t).toFloat()
+            veil.repaint()
+            if (t >= 1.0) {
+                timer.stop()
+                veil.isVisible = false
+            }
+        }
+        timer.start()
     }
 
     private fun buildDeviceBar(): JPanel {
@@ -1721,7 +1777,7 @@ class MainWindow : JFrame("Omega-Plugin") {
      * away and playback stops, but the lanes keep their audio until the process ends — see
      * `Looper`. Popping the board in or out is never audible; this is.
      */
-    private fun setLoop(on: Boolean, fromUser: Boolean = true) {
+    private fun setLoop(on: Boolean, fromUser: Boolean = true, atOnce: Boolean = false) {
         if (loop == on) return
         loop = on
         strip.setLoop(on)
@@ -1730,9 +1786,10 @@ class MainWindow : JFrame("Omega-Plugin") {
             // not starting anything. REC or PLAY starts the transport.
             looper.playing = false
             looper.enabled = true
-            loopBoard.alpha = 0f
+            // [atOnce] is startup, before the window has been seen: the board is simply there.
+            loopBoard.alpha = if (atOnce) 1f else 0f
             loopBoard.docked = true
-            stack.showAbove(loopBoard, loopBoard)
+            stack.showAbove(loopBoard, loopBoard, atOnce)
         } else {
             loopBoard.stopAllRecording()
             looper.enabled = false
@@ -3156,6 +3213,9 @@ class MainWindow : JFrame("Omega-Plugin") {
          * was measured, and `realtimeRatio` will tell the truth either way.
          */
         const val SPLIT_NAM_FRAMES = 256
+
+        /** The entrance: the veil's fade, logo out and window in, in milliseconds. A breath, not a production. */
+        const val VEIL_MILLIS = 280.0
 
         /**
          * How many taps the tempo is averaged over.
