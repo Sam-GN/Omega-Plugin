@@ -48,6 +48,7 @@ be confused with each other:
 | `docs/low-latency-backend.md` | The design behind the `AudioBackend` seam. History rather than a plan — the seam it describes is built. |
 | `docs/virtual-io.md` | Routing Omega into and out of other applications. |
 | `docs/WhatsDone.md` | What has been finished, against the original requirements. |
+| `docs/update-check.md` | **The agreed plan for 1.8.0**, not built: a Check for updates button on About and an Update button that replaces the installed bundle, the only two times the program may touch the network. Its §11 lists what is still open; everything else in it is decided. |
 | `docs/theme-optional.md`, `docs/profile-optional.md`, `docs/pickup-optional.md`, `docs/instrument-sampler.md` | **Proposals for things nobody has promised.** Written to review later. Do not treat as commitments or as a backlog. The last is the instrument sampler — a captured note played chromatically from a keyboard, and the guitar as its controller. |
 
 Nothing in any of them is a markdown link — every cross-reference is prose in backticks, which is
