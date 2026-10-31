@@ -9,6 +9,19 @@ unverified, it says so.
 
 ---
 
+## [1.7.1-beta] — 2026-10-31
+
+### Fixed — the Licences screen names the Linux notice too
+
+The screen said the bundled Java runtime was named in `READ-ME-FIRST.txt` beside the Windows
+bundle, and nothing else. A Linux user has `RUNTIME-NOTICE.txt` inside the AppImage instead, and
+has had it since 1.1.0; the screen now names both, and the runtime's own `legal/` folder next to
+each. It also lists the launcher stub `appimagetool` prepends to the AppImage, the AppImage runtime
+under the MIT licence. No obligation was unmet — the files were always there — but a compliance
+list that leaves out half the bundles reads as if something was forgotten.
+
+---
+
 ## [1.7.0-beta] — 2026-10-31
 
 ### Added — ALSA converts a mismatched input, as WASAPI does
