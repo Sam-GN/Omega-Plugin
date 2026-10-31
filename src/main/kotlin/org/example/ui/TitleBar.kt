@@ -216,6 +216,7 @@ class TitleBar(
             title = "About",
             heading = "Omega-Plugin",
             lines = Licences.about(version),
+            link = "User manual" to Licences.MANUAL_URL,
         )
     }
 

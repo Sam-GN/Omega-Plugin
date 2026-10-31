@@ -51,10 +51,19 @@ object Licences {
      * Under GPLv3 §6 a binary has to be accompanied by its Corresponding Source — beside it, by a
      * written offer, or from the same place it is downloaded from — so
      * **this URL has to resolve, and has to carry the tag a given binary was built from.** It is
-     * deliberately the only such string in the program. Publishing a release on this repository is
-     * what discharges §6(d); handing a build out any other way needs the source alongside it.
+     * deliberately the only repository named in the program. Publishing a release on this repository
+     * is what discharges §6(d); handing a build out any other way needs the source alongside it.
+     * [MANUAL_URL] is built from it.
      */
     const val SOURCE_URL = "https://github.com/Sam-GN/Omega-Plugin"
+
+    /**
+     * The user manual, `docs/manual.md` on the default branch of [SOURCE_URL].
+     *
+     * Derived from the source URL rather than written out, so the two cannot name different
+     * repositories. About shows it as a link; it is the only other address the program carries.
+     */
+    const val MANUAL_URL = "$SOURCE_URL/blob/main/docs/manual.md"
 
     const val COPYRIGHT = "Copyright © 2026 Sam Ganji <sam.ganji.n@gmail.com>"
 

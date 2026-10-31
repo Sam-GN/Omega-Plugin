@@ -9,6 +9,24 @@ unverified, it says so.
 
 ---
 
+## [1.7.2-beta] — 2026-10-31
+
+### Added — a user manual, and a link to it from About
+
+`docs/manual.md` explains every control in the program for somebody who has never used it: what to
+plug in, the device row and what each picker means, latency in plain words, how knobs, switches,
+dropdowns and dragging work, every pedal with its knobs' ranges and defaults, the FX slot types,
+split mode, the loop box, the rhythm section and its menu, recording, presets, the ☰ menu, what the
+session restores, the status line and the health readout, keys and footswitches, where the files
+live, a troubleshooting list, the command-line diagnostics, and a glossary.
+
+README.md links to it near the top. **☰ → About** carries a *User manual* line that opens the same
+page in the browser; where no browser can be reached, the address is put on the clipboard and the
+line says so. `Licences.MANUAL_URL` is built from `SOURCE_URL`, so the two cannot name different
+repositories.
+
+---
+
 ## [1.7.1-beta] — 2026-10-31
 
 ### Fixed — the Licences screen names the Linux notice too

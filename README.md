@@ -9,6 +9,9 @@ any order, and FX slots are added and removed. A split switch puts a second boar
 fed the same guitar and heard with it, so one sound can be a clean amp and a driven one at once.
 Despite the name, it is not an IDE plugin — "plugin" here means a guitar effect.
 
+**New to it?** The [user manual](docs/manual.md) explains every control in the program, in plain
+language, from plugging in to the loop box. The same link is under **☰ → About** in the program.
+
 ![The board mid-stream, with a second FX slot added, above the device row and the rhythm section](docs/img/screenshot.png)
 
 The picture is a real stream: WASAPI exclusive at 48 kHz and 144 frames — 9.0 ms by the driver's own

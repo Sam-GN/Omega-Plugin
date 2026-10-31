@@ -43,6 +43,7 @@ be confused with each other:
 
 | File | What it is |
 | --- | --- |
+| `docs/manual.md` | **The user manual**, written for a player who has never used the program: every control, every pedal, every menu item, and what to do when it goes wrong. The one document here meant for users rather than maintainers — README.md and the About dialog (`Licences.MANUAL_URL`) link to it. **When a control changes, change it here too.** Its table of contents links to its own headings, the one place in `docs/` a markdown link is allowed, because an anchor survives a move. |
 | `docs/known-issues.md` | **Defects in code that already ships.** Nothing speculative. Each entry is a shortcoming in something a user can switch on today. |
 | `docs/linux-compat.md` | **The Linux work plan**, numbered `F1`–`F11` against workstreams `W1`–`W7`, mostly built in 1.1.0. Its §0 is the current status and overrides the plan text below it. AppImage is the chosen format. |
 | `docs/low-latency-backend.md` | The design behind the `AudioBackend` seam. History rather than a plan — the seam it describes is built. |
@@ -52,7 +53,8 @@ be confused with each other:
 | `docs/theme-optional.md`, `docs/profile-optional.md`, `docs/pickup-optional.md`, `docs/instrument-sampler.md` | **Proposals for things nobody has promised.** Written to review later. Do not treat as commitments or as a backlog. The last is the instrument sampler — a captured note played chromatically from a keyboard, and the guitar as its controller. |
 
 Nothing in any of them is a markdown link — every cross-reference is prose in backticks, which is
-what made moving them into `docs/` cost nothing. Keep it that way.
+what made moving them into `docs/` cost nothing. Keep it that way. The manual's own table of
+contents is the one exception, noted above.
 
 ## Build and run
 

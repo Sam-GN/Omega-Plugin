@@ -132,6 +132,9 @@ object ConfirmDialog {
 object MessageDialog {
 
     /**
+     * [link] is a line that opens an address: its text, and the URL. One at most, and after
+     * everything else, because the one caller with one — About — has one place to send people.
+     *
      * [maxLines] exists for the one caller that is not a list of failures.
      *
      * The cap is there so a folder full of broken presets cannot produce a dialog taller than the
@@ -145,6 +148,7 @@ object MessageDialog {
         heading: String,
         lines: List<String>,
         maxLines: Int = MAX_LINES,
+        link: Pair<String, String>? = null,
     ) {
         val dialog = JDialog(owner, title, Dialog.ModalityType.APPLICATION_MODAL).apply {
             isUndecorated = true
@@ -178,6 +182,10 @@ object MessageDialog {
                     }
                 )
             }
+            if (link != null) {
+                add(javax.swing.Box.createVerticalStrut(GROUP_GAP))
+                add(linkLabel(link.first, link.second))
+            }
         }
 
         val body = JPanel(BorderLayout(0, 14)).apply {
@@ -207,6 +215,51 @@ object MessageDialog {
         dialog.pack()
         dialog.setLocationRelativeTo(owner)
         dialog.isVisible = true
+    }
+
+    /**
+     * A line that opens [url] in the browser when clicked.
+     *
+     * Accent-coloured and underlined, with the hand cursor and the address in the tooltip, so it
+     * reads as a link without a word of explanation. Where no browser can be reached — a Linux
+     * desktop without a URL handler is where `Desktop.browse` fails — the address goes on the
+     * clipboard instead and the line says so, because a link that silently does nothing is worse
+     * than no link.
+     */
+    private fun linkLabel(text: String, url: String): JLabel {
+        val label = JLabel("<html><u>$text</u></html>").apply {
+            font = Theme.BODY_FONT
+            foreground = Theme.ACCENT
+            alignmentX = 0f
+            toolTipText = url
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        }
+        Clicks.onRelease(label, enabled = { true }) { open(url, label) }
+        return label
+    }
+
+    private fun open(url: String, label: JLabel) {
+        val desktop = if (java.awt.Desktop.isDesktopSupported()) java.awt.Desktop.getDesktop() else null
+        if (desktop == null || !desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
+            copyInstead(url, label)
+            return
+        }
+        // Off the event thread: on some desktops browse() blocks until the browser has started.
+        Thread({
+            runCatching { desktop.browse(java.net.URI(url)) }
+                .onFailure { javax.swing.SwingUtilities.invokeLater { copyInstead(url, label) } }
+        }, "omega-open-link").apply { isDaemon = true }.start()
+    }
+
+    private fun copyInstead(url: String, label: JLabel) {
+        runCatching {
+            java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                .setContents(java.awt.datatransfer.StringSelection(url), null)
+        }
+        label.text = "<html>Copied the address — paste it into a browser:<br>$url</html>"
+        label.foreground = Theme.TEXT_DIM
+        label.cursor = Cursor.getDefaultCursor()
+        javax.swing.SwingUtilities.getWindowAncestor(label)?.pack()
     }
 
     /** Default cap, for the unbounded case: a batch of failures. See [show]. */
