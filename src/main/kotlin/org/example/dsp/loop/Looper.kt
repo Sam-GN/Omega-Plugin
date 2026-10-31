@@ -146,11 +146,12 @@ class Looper {
 
     /**
      * The transport: paused, every lane ramps to silence and the playhead holds where it is, so
-     * play resumes rather than restarts. Recording needs it running, and REC on the panel starts
-     * it. Distinct from [enabled], which is the loop board being there at all.
+     * play resumes rather than restarts. Starts paused — opening the box is not a reason to play —
+     * and REC or PLAY on the panel starts it. Distinct from [enabled], which is the loop board
+     * being there at all.
      */
     @Volatile
-    var playing: Boolean = true
+    var playing: Boolean = false
 
     /** Frames in one pass of the loop, or zero while no lane has set it. */
     @Volatile

@@ -48,7 +48,7 @@ be confused with each other:
 | `docs/low-latency-backend.md` | The design behind the `AudioBackend` seam. History rather than a plan — the seam it describes is built. |
 | `docs/virtual-io.md` | Routing Omega into and out of other applications. |
 | `docs/WhatsDone.md` | What has been finished, against the original requirements. |
-| `docs/theme-optional.md`, `docs/profile-optional.md`, `docs/pickup-optional.md` | **Proposals for things nobody has promised.** Written to review later. Do not treat as commitments or as a backlog. |
+| `docs/theme-optional.md`, `docs/profile-optional.md`, `docs/pickup-optional.md`, `docs/instrument-sampler.md` | **Proposals for things nobody has promised.** Written to review later. Do not treat as commitments or as a backlog. The last is the instrument sampler — a captured note played chromatically from a keyboard, and the guitar as its controller. |
 
 Nothing in any of them is a markdown link — every cross-reference is prose in backticks, which is
 what made moving them into `docs/` cost nothing. Keep it that way.
@@ -167,6 +167,12 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
   `DarkTextField.installClickAwayCommit` is on the toolkit rather than per field, so it reaches the
   editors built on demand. It moves focus and nothing else — every field here commits on `focusLost`,
   so moving focus *is* Enter, and firing the action too would commit twice.
+
+  **A button fires on the release, never on `mouseClicked`.** AWT generates that event only when
+  the pointer did not move a pixel between press and release, so a firm press that drifts is lost
+  and the user clicks twice. `Clicks.onRelease` is the one place that does it right — press on the
+  component, left release still inside it — and every custom button goes through it or through
+  `PushButton`, which has the same rule built in.
 
   **Wheel notches belong to a gesture, not to what is under the pointer.** `WheelGesture` is the
   one place that decides: the first notch of a run picks its owner — the boards' scroll pane, a
@@ -289,11 +295,22 @@ sees a JACK entry and the Windows picker is exactly what it was before Linux exi
   `legalBufferSizes`, which has tests.
 - **Never round-trip a frame count through 100 ns units to compare it.** 264 frames at 44.1 kHz is
   59 863 945.578 units, which comes back as 263. Keep the frame count you asked for.
-- **Rate is negotiated across both endpoints, and there is no resampler.** See `SampleRates`. A
-  backend that ignores the output's rates will ask a 48 kHz-only device for 44.1 kHz and then report
+- **The engine runs at the output's rate; only the input is ever converted.** See `SampleRates`.
+  On a two-clock backend that sets `convertsInput` (WASAPI, both modes) the picker offers the
+  output's rates, and one the input cannot do is marked `C`: the capture endpoint opens at its own
+  rate and its packets go through the chain's fixed-ratio `Resampler` on the way into the ring,
+  which already absorbs uneven counts; the ppm drift between the two crystals is the render loop's
+  existing correction, exactly as at equal rates. The output is never converted — the round trip
+  is set by the hardware periods in milliseconds and the engine's rate only changes how many
+  frames that is, and the render side has no ring to absorb a resampler's uneven counts. A backend
+  without the converter (ALSA) still offers the intersection and refuses the rest by name. Before
+  1.6.0 nothing converted, on the belief that it would cost more than the backend saved; measured,
+  it is 32 frames at the input's rate, 0.7 ms, against a ring hop of a whole period. A backend
+  that ignores the output's rates will still ask a 48 kHz-only device for 44.1 kHz and then report
   the refusal as though the user could fix it in Windows.
 - **Declare what the adapter adds.** `StreamFormat.adapterLatencyFrames` is the ring hop on a
-  two-clock backend and the cushion on Java Sound. Hiding it makes cross-backend comparison a lie.
+  two-clock backend, the cushion on Java Sound, and the converter's delay when `inputRate` differs
+  from `sampleRate`. Hiding it makes cross-backend comparison a lie.
 - **Release in a `finally`.** Under exclusive mode a device left held can need a reboot.
 - **The OS check comes first and must not load JNA.** `LinuxPlatform.isLinux` is JNA-free;
   `LinuxRt.isLinux` used to exist and broke this — JNA off the classpath made the guard itself fail,
@@ -468,7 +485,9 @@ back. The rules it depends on:
   next block, where the playhead is read, and refuses during a recording. ✕ on the panel clears a
   lane with content and removes an empty one; the first lane is never removed.
 - **Play and pause** are `Looper.playing`: paused, the lanes fade to silence and the playhead
-  holds, so play resumes rather than restarts; REC while paused starts the transport.
+  holds, so play resumes rather than restarts; REC while paused starts the transport. The box
+  opens paused — switching loop mode on sets `playing` false — so the button reads PLAY until
+  the user starts something. The tests and `--selftest` set it true themselves.
 - **Lanes outlive everything but the process**: the panel being hidden, the pop-out, the stream
   stopping, the rate changing. Loop off stops playback with a fade and keeps the audio. The session
   stores only whether the board was on; `Config` keeps the key bindings, the popped-out window's
@@ -678,7 +697,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-372 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+381 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
 it runs on Windows too. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
@@ -710,7 +729,12 @@ you worked out yourself, not against what the code currently returns:
 - **`SampleRatesTest`** covers rate negotiation against the two real devices that exposed the bug —
   a 44.1 kHz-only USB interface and a 48 kHz-only HDMI output. It asserts the intersection, which
   rate is chosen and why, that the period shortens as the rate rises, and — as a regression guard —
-  that the no-overlap message never again tells the user to change a Windows sound setting.
+  that the no-overlap message never again tells the user to change a Windows sound setting. Since
+  1.6.0 it also pins the converter's side: a converting backend offers the output's rates, a native
+  rate is recommended over a converted one, the capture rate agrees with the rate the sizes were
+  probed at, and that same failing pair negotiates at 48 kHz with the input converted.
+  `ResamplerTest` checks that uneven chunks give the same samples as one call, which is how a
+  capture packet arrives.
 - **`AudioEngineTest`** covers the callback body: silence in/silence out, the input buffer is never
   written to (several backends hand out a view onto driver memory), output is clamped, a chain that
   throws yields silence and a flag rather than noise, short blocks leave the buffer tail alone, and

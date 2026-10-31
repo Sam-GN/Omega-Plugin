@@ -285,10 +285,11 @@ class MainWindow : JFrame("Omega-Plugin") {
      * would cost more latency and quality than this whole backend bought.
      */
     private val rateCombo = JComboBox<Int>().apply {
-        toolTipText = "<html>Sample rate. Only rates both the input and the output accept are " +
-            "listed — Omega does not resample between them.<br>A higher rate shortens the callback " +
-            "period for the same buffer size, at more CPU per second.<br>Fixed for the life of a " +
-            "stream, so it locks while running.</html>"
+        toolTipText = "<html>Sample rate — the output's, which the engine runs at.<br>" +
+            "<b>C</b> marks a rate the input cannot do itself: it runs at its own rate and is " +
+            "converted on the way in, adding under a millisecond. The status line says which.<br>" +
+            "A higher rate shortens the callback period for the same buffer size, at more CPU per " +
+            "second.<br>Fixed for the life of a stream, so it locks while running.</html>"
         renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
                 list: JList<*>?,
@@ -298,11 +299,21 @@ class MainWindow : JFrame("Omega-Plugin") {
                 focused: Boolean,
             ): Component {
                 super.getListCellRendererComponent(list, value, index, selected, focused)
-                text = (value as? Int)?.let { SampleRates.format(it) } ?: " "
+                text = (value as? Int)?.let { SampleRates.label(it, it in convertedRates) } ?: " "
                 return this
             }
         }
     }
+
+    /**
+     * Rates in the picker that the selected input cannot run at natively, so choosing one has the
+     * backend open the input at its own rate and convert. Drawn with a `C`; explained in the status
+     * line. Empty on a single-device backend and on one that does not convert.
+     */
+    private var convertedRates: Set<Int> = emptySet()
+
+    /** The rate the selected input would actually open at under a converted rate, for the note. */
+    private var inputNativeRate: Int = 0
 
     /**
      * Buffer size in **frames**, and only ever a value the driver said it would accept.
@@ -1052,13 +1063,10 @@ class MainWindow : JFrame("Omega-Plugin") {
         // useful thing to do with a driver's complaint is paste it somewhere — a search, a bug
         // report, a message to somebody who knows what it means. Retyping it by eye is exactly the
         // point at which the detail that mattered gets lost.
-        val clicks = object : MouseAdapter() {
-            override fun mouseClicked(event: MouseEvent) {
-                if (overStatusText(event)) copyStatus()
-            }
-
-            // Only the text itself is clickable, not the empty width of the label. A whole-width
-            // hit area would copy on a click in what looks like blank background.
+        Clicks.onRelease(status, enabled = { true }) { event -> if (overStatusText(event)) copyStatus() }
+        // Only the text itself is clickable, not the empty width of the label. A whole-width
+        // hit area would copy on a click in what looks like blank background.
+        status.addMouseMotionListener(object : MouseAdapter() {
             override fun mouseMoved(event: MouseEvent) {
                 status.cursor = if (overStatusText(event)) {
                     Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
@@ -1066,9 +1074,7 @@ class MainWindow : JFrame("Omega-Plugin") {
                     Cursor.getDefaultCursor()
                 }
             }
-        }
-        status.addMouseListener(clicks)
-        status.addMouseMotionListener(clicks)
+        })
 
         add(status, BorderLayout.CENTER)
         add(
@@ -1720,6 +1726,9 @@ class MainWindow : JFrame("Omega-Plugin") {
         loop = on
         strip.setLoop(on)
         if (on) {
+            // The board arrives paused, showing PLAY: switching loop mode on is opening the box,
+            // not starting anything. REC or PLAY starts the transport.
+            looper.playing = false
             looper.enabled = true
             loopBoard.alpha = 0f
             loopBoard.docked = true
@@ -2082,7 +2091,12 @@ class MainWindow : JFrame("Omega-Plugin") {
             val input = inputCombo.selectedItem as? BackendDevice
             val output = outputCombo.selectedItem as? BackendDevice
             if (input != null && output != null) {
-                setStatus("${input.name} to ${output.name} at ${SampleRates.format(displayRate)}.", Theme.TEXT_DIM)
+                val converted = displayRate in convertedRates
+                setStatus(
+                    "${input.name} to ${output.name} at ${SampleRates.label(displayRate, converted)}" +
+                        if (converted) " — ${SampleRates.conversionNote(input.name, inputNativeRate, displayRate)}" else ".",
+                    Theme.TEXT_DIM,
+                )
             }
         }
     }
@@ -2116,12 +2130,21 @@ class MainWindow : JFrame("Omega-Plugin") {
         val outputCaps = output?.let { runCatching { backend.capabilities(it) }.getOrNull() }
 
         // One driver owns both directions, so there is nothing to reconcile — asking the "output"
-        // separately would just be the same device answering twice.
-        val shared = if (singleDevice || output == null || input == null || input.id == output.id) {
+        // separately would just be the same device answering twice. Two devices: the output's
+        // rates on a backend that converts its input, the intersection on one that does not.
+        val twoDevices = !(singleDevice || output == null || input == null || input.id == output.id)
+        val inputRates = inputCaps?.sampleRates.orEmpty()
+        val shared = if (!twoDevices) {
             (inputCaps ?: outputCaps)?.sampleRates.orEmpty()
         } else {
-            SampleRates.common(inputCaps?.sampleRates.orEmpty(), outputCaps?.sampleRates.orEmpty())
+            SampleRates.offer(inputRates, outputCaps?.sampleRates.orEmpty(), backend.convertsInput)
         }
+        convertedRates = if (twoDevices && backend.convertsInput) {
+            shared.filter { SampleRates.needsConversion(it, inputRates) }.toSet()
+        } else {
+            emptySet()
+        }
+        inputNativeRate = inputCaps?.preferredSampleRate ?: 0
 
         unusableDevice = null
         if (shared.isEmpty() && input != null && output != null) {
@@ -2151,6 +2174,7 @@ class MainWindow : JFrame("Omega-Plugin") {
                 offered,
                 inputCaps?.preferredSampleRate,
                 outputCaps?.preferredSampleRate,
+                inputRates = if (twoDevices) inputRates else emptyList(),
             )
         }
         populating = false
@@ -2315,8 +2339,12 @@ class MainWindow : JFrame("Omega-Plugin") {
             // The driver may have granted a different rate or buffer than was asked for, and what it
             // granted is what should come back next time.
             saveSession()
+            // The stream knows whether the input is being converted; the picker only predicted it.
+            val streamFormat = engine.format
+            val converted = streamFormat?.inputConverted == true
             setStatus(
-                "Running — ${input.name} to ${output.name} at ${SampleRates.format(displayRate)}",
+                "Running — ${input.name} to ${output.name} at ${SampleRates.label(displayRate, converted)}" +
+                    if (converted) " — ${SampleRates.conversionNote(input.name, streamFormat!!.inputRate, displayRate)}" else "",
                 Theme.GOOD,
             )
             // Linux only in practice: Windows backends report nothing here. A thread that did not

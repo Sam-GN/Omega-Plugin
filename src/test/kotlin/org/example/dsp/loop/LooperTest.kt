@@ -41,6 +41,7 @@ class LooperTest {
     private fun looper(rate: Float = 640f) = Looper().apply {
         prepare(rate)
         enabled = true
+        playing = true
     }
 
     /** One engine block: a copy of [input], through-lanes added, then "the chain", then finish. */

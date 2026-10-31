@@ -91,7 +91,7 @@ than making one slow, so `deadlineMisses` reads zero straight through audible dr
 | `known-issues.md` | Defects in code that **already ships**. Nothing speculative. |
 | `linux-compat.md` | The **work plan** for the Linux port. Numbered; each item says whether it is done. |
 | `low-latency-backend.md`, `virtual-io.md`, `WhatsDone.md` | History and reference. |
-| `theme-optional.md`, `profile-optional.md`, `pickup-optional.md` | **Proposals nobody has promised.** Not a backlog. |
+| `theme-optional.md`, `profile-optional.md`, `pickup-optional.md`, `instrument-sampler.md` | **Proposals nobody has promised.** Not a backlog. |
 
 No file in `docs/` uses markdown links; every cross-reference is prose in backticks, which is what
 made moving them there cost nothing.

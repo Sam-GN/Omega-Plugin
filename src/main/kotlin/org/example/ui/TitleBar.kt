@@ -310,9 +310,8 @@ class TitleBar(
                     hover = false
                     repaint()
                 }
-
-                override fun mouseClicked(e: MouseEvent) = onClick()
             })
+            Clicks.onRelease(this, enabled = { true }) { onClick() }
         }
 
         override fun paintComponent(g: Graphics) {

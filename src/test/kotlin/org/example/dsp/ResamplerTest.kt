@@ -217,4 +217,36 @@ class ResamplerTest {
         for (i in first.indices) assertEquals(first[i], second[i], 1e-6f, "frame $i")
     }
 
+    @Test
+    fun `uneven chunks produce the same samples as one call, so the phase carries across calls`() {
+        // The capture side of a two-clock backend feeds the converter whatever a packet holds, and
+        // a shared-mode packet is not a fixed size. The output must not depend on how the input was
+        // cut: the polyphase phase and the history have to carry from one call to the next.
+        val total = 4_410
+        val signal = FloatArray(total) { sine(it, 1_000.0, 44_100.0) }
+
+        val whole = Resampler(44_100f, 48_000f, total)
+        val wholeOut = FloatArray(whole.maxOutputFrames)
+        val wholeCount = whole.process(signal, total, wholeOut)
+
+        val chunked = Resampler(44_100f, 48_000f, total)
+        val chunkedOut = FloatArray(chunked.maxOutputFrames)
+        var produced = 0
+        var at = 0
+        var step = 1
+        while (at < total) {
+            val take = minOf(step, total - at)
+            val piece = signal.copyOfRange(at, at + take)
+            val scratch = FloatArray(chunked.maxOutputFrames)
+            val n = chunked.process(piece, take, scratch)
+            System.arraycopy(scratch, 0, chunkedOut, produced, n)
+            produced += n
+            at += take
+            step = step % 97 + 1
+        }
+
+        assertEquals(wholeCount, produced, "frame counts differ")
+        for (i in 0 until wholeCount) assertEquals(wholeOut[i], chunkedOut[i], 1e-6f, "frame $i")
+    }
+
 }

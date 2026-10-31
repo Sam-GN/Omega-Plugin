@@ -126,12 +126,76 @@ class SampleRatesTest {
     }
 
     @Test
-    fun `the message says resampling is a deliberate refusal`() {
+    fun `the message says this path does not convert, so the user knows where it is a choice`() {
         val message = SampleRates.noOverlapMessage("in", sonicake, "out", realtek)
         assertTrue(
-            message.contains("resample", ignoreCase = true),
-            "a user told 'no' deserves to know it is a choice, not a missing feature: $message",
+            message.contains("convert", ignoreCase = true),
+            "a user told 'no' deserves to know it is the driver path, not a missing feature: $message",
         )
+    }
+
+    // ---- the input converter ----------------------------------------------------
+
+    @Test
+    fun `a converting backend offers the output's rates, whatever the input does`() {
+        assertEquals(listOf(48_000), SampleRates.offer(sonicake, aorus, convertsInput = true))
+        assertEquals(listOf(44_100, 48_000, 96_000), SampleRates.offer(sonicake, flexible, convertsInput = true))
+        // And one that does not convert still gets the intersection.
+        assertEquals(emptyList(), SampleRates.offer(sonicake, aorus, convertsInput = false))
+        assertEquals(listOf(44_100), SampleRates.offer(sonicake, flexible, convertsInput = false))
+    }
+
+    @Test
+    fun `an output that reported nothing leaves the input's rates on offer`() {
+        assertEquals(listOf(44_100), SampleRates.offer(sonicake, emptyList(), convertsInput = true))
+    }
+
+    @Test
+    fun `a rate is converted exactly when the input cannot do it`() {
+        assertTrue(SampleRates.needsConversion(48_000, sonicake))
+        assertTrue(!SampleRates.needsConversion(44_100, sonicake))
+        assertTrue(!SampleRates.needsConversion(48_000, flexible))
+        // An input that reported no rates constrains nothing, so it is never "converted".
+        assertTrue(!SampleRates.needsConversion(48_000, emptyList()))
+    }
+
+    @Test
+    fun `the capture rate is the engine's when it can be and the input's own when it cannot`() {
+        assertEquals(48_000, SampleRates.captureRate(48_000, flexible, 44_100))
+        assertEquals(44_100, SampleRates.captureRate(48_000, sonicake, 44_100))
+        // Preferred wins among the input's rates; the highest stands in when there is none.
+        assertEquals(44_100, SampleRates.captureRate(192_000, flexible, 44_100))
+        assertEquals(96_000, SampleRates.captureRate(192_000, flexible, null))
+    }
+
+    @Test
+    fun `a native rate is recommended over a converted one, whatever anybody prefers`() {
+        // Output flexible, input 44.1 only: 48 and 96 would be converted. 44.1 is native and wins
+        // even though 96 is the higher rate and the output is set to 48.
+        val offered = SampleRates.offer(sonicake, flexible, convertsInput = true)
+        assertEquals(44_100, SampleRates.recommended(offered, 44_100, 48_000, inputRates = sonicake))
+        // Only converted rates on offer: the output's own setting is used.
+        assertEquals(48_000, SampleRates.recommended(listOf(48_000, 96_000), 44_100, 48_000, inputRates = sonicake))
+    }
+
+    @Test
+    fun `the converter costs half its filter at the input's rate`() {
+        // 64 taps, so 32 frames: 0.73 ms at 44.1 kHz, 0.67 at 48 — in engine frames, 35 at 48 kHz.
+        assertEquals(0.726f, SampleRates.conversionMs(44_100), 0.001f)
+        assertEquals(0.667f, SampleRates.conversionMs(48_000), 0.001f)
+        assertEquals(35, SampleRates.conversionFrames(44_100, 48_000))
+        assertEquals(0, SampleRates.conversionFrames(0, 48_000))
+    }
+
+    @Test
+    fun `the C is explained with both rates and the cost`() {
+        val note = SampleRates.conversionNote("Line (Pocket Master Audio)", 44_100, 48_000)
+        assertContains(note, "Line (Pocket Master Audio)")
+        assertContains(note, "44.1 kHz")
+        assertContains(note, "48 kHz")
+        assertContains(note, "0.7 ms")
+        assertEquals("48 kHz C", SampleRates.label(48_000, converted = true))
+        assertEquals("48 kHz", SampleRates.label(48_000, converted = false))
     }
 
     // ---- formatting -----------------------------------------------------------
@@ -172,12 +236,24 @@ class SampleRatesTest {
     // ---- the real pairings ------------------------------------------------------
 
     @Test
-    fun `the failing pair is caught before the driver is ever asked`() {
+    fun `the failing pair is caught before the driver is ever asked, where nothing converts`() {
         // Sonicake input at 44.1 with the AORUS HDMI output at 48: the exact case that produced
-        // impossible advice. There is no rate to try, so nothing should be requested at all.
+        // impossible advice. On a path with no converter there is no rate to try, so nothing
+        // should be requested at all.
         val shared = SampleRates.common(sonicake, aorus)
         assertTrue(shared.isEmpty())
         assertNull(SampleRates.recommended(shared, 44_100, 48_000))
+    }
+
+    @Test
+    fun `the same pair runs at 48 kHz with the input converted where the backend converts`() {
+        // The engine takes the output's rate; the Sonicake opens at its own 44.1 and is converted.
+        val offered = SampleRates.offer(sonicake, aorus, convertsInput = true)
+        assertEquals(listOf(48_000), offered)
+        val rate = SampleRates.recommended(offered, 44_100, 48_000, inputRates = sonicake)
+        assertEquals(48_000, rate)
+        assertTrue(SampleRates.needsConversion(rate!!, sonicake))
+        assertEquals(44_100, SampleRates.captureRate(rate, sonicake, 44_100))
     }
 
     @Test

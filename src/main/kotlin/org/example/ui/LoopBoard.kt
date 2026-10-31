@@ -936,10 +936,8 @@ class LoopBoard(
             addMouseListener(object : MouseAdapter() {
                 override fun mouseEntered(e: MouseEvent) { hover = true; repaint() }
                 override fun mouseExited(e: MouseEvent) { hover = false; repaint() }
-                override fun mouseClicked(e: MouseEvent) {
-                    if (isEnabled && !dimmed && SwingUtilities.isLeftMouseButton(e)) onClick()
-                }
             })
+            Clicks.onRelease(this, enabled = { isEnabled && !dimmed }) { onClick() }
         }
 
         // Hover is learnt from enter and exit alone, and a cube that leaves the tree under the

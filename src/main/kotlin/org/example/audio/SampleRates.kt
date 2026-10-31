@@ -19,17 +19,28 @@
  */
 package org.example.audio
 
+import org.example.dsp.Resampler
+
 /**
  * Choosing one sample rate for two pieces of hardware that may not agree.
  *
- * The rule, and it is deliberate: **offer only rates both endpoints accept, and never resample.**
- * A resampler in the signal path costs latency and quality, which is precisely what this backend
- * exists to buy back — converting 44.1 to 48 kHz to paper over a mismatch would give away more than
- * the whole move from Java Sound gained. So when there is no overlap the honest answer is to say
- * which device wants what, not to quietly fix it.
+ * The rule: **the engine runs at the output's rate, and only the input is ever converted.** On a
+ * two-clock backend the render endpoint drives the engine, so it stays native and every block is
+ * exactly its period; a capture endpoint that cannot do that rate opens at its own and its samples
+ * go through the chain's fixed-ratio `Resampler` on the way into the ring, which already absorbs
+ * uneven counts. The conversion costs half the filter — 32 frames at the input's rate, 0.7 ms at
+ * 44.1 kHz — and is declared in `StreamFormat.adapterLatencyFrames` and said in the status line.
+ * Converting the output instead would buy nothing: the round trip is set by the hardware periods
+ * in milliseconds, and the engine's rate only changes how many frames that is.
  *
- * Single-device backends (ASIO, and JACK later) never reach this: one driver owns both directions,
- * so there is one rate and nothing to reconcile.
+ * Up to 1.5.x the rule was "offer only rates both accept, never resample", on the belief that a
+ * converter would cost more than the backend saved. Measured against this filter it is a small
+ * fraction of the ring hop that was already there, and the pair it refused — a 44.1 kHz-only USB
+ * interface into a 48 kHz-only HDMI output — is an ordinary desk.
+ *
+ * Not every backend converts. [AudioBackend.convertsInput] says which; the rest still get the
+ * intersection and the honest refusal. Single-device backends (ASIO, JACK) never reach any of
+ * this: one driver owns both directions, so there is one rate and nothing to reconcile.
  *
  * Rate is also a latency lever, which is why the picker is worth having rather than a constant.
  * The period is `frames / rate`, so at a fixed 128 frames:
@@ -59,26 +70,63 @@ object SampleRates {
     }
 
     /**
-     * Which of [available] to select by default.
+     * The rates to put in the picker.
      *
-     * The endpoints' own preferences come first, because those are not guesses: for ASIO it is the
-     * rate set in the driver's control panel, and for WASAPI it is the rate Windows is configured
-     * for. Honouring that means the picker opens on the value the user already chose elsewhere, and
-     * it avoids forcing a rate switch the hardware would have to do at open.
-     *
-     * Only when neither preference survives the intersection does policy apply, and then the
-     * highest common rate wins — the period shortens as the rate rises, and this program's whole
-     * objective is the shortest period the hardware will hold.
+     * On a backend that converts its input, the output's rates — all of them, since the input can
+     * be brought to any of them. On one that does not, the intersection. An output that reported
+     * nothing constrains nothing, as in [common].
      */
-    fun recommended(available: List<Int>, inputPreferred: Int? = null, outputPreferred: Int? = null): Int? {
-        if (available.isEmpty()) return null
-        inputPreferred?.let { if (it in available) return it }
-        outputPreferred?.let { if (it in available) return it }
-        return available.max()
+    fun offer(inputRates: List<Int>, outputRates: List<Int>, convertsInput: Boolean): List<Int> = when {
+        !convertsInput -> common(inputRates, outputRates)
+        outputRates.isEmpty() -> inputRates.distinct().sorted()
+        else -> outputRates.distinct().sorted()
+    }
+
+    /** Whether running the engine at [rate] means converting an input that offers [inputRates]. */
+    fun needsConversion(rate: Int, inputRates: List<Int>): Boolean =
+        inputRates.isNotEmpty() && rate !in inputRates
+
+    /**
+     * The rate the capture endpoint opens at when the engine runs at [rate]: [rate] itself when it
+     * can, else the rate it is already set to, else the highest it offers. The rate a backend
+     * probed its buffer sizes at has to agree with this, which is why it is one function.
+     */
+    fun captureRate(rate: Int, inputRates: List<Int>, inputPreferred: Int?): Int = when {
+        !needsConversion(rate, inputRates) -> rate
+        inputPreferred != null && inputPreferred in inputRates -> inputPreferred
+        else -> inputRates.max()
     }
 
     /**
-     * The sentence shown when the two endpoints share no rate.
+     * Which of [available] to select by default.
+     *
+     * A rate the input can do natively beats one it would have to be converted to, whatever
+     * anybody prefers: the conversion is cheap, and still not free. Within that, the endpoints'
+     * own preferences come first, because those are not guesses: for ASIO it is the rate set in
+     * the driver's control panel, and for WASAPI it is the rate Windows is configured for.
+     * Honouring that means the picker opens on the value the user already chose elsewhere, and
+     * it avoids forcing a rate switch the hardware would have to do at open.
+     *
+     * Only when neither preference survives does policy apply, and then the highest rate wins —
+     * the period shortens as the rate rises, and this program's whole objective is the shortest
+     * period the hardware will hold.
+     */
+    fun recommended(
+        available: List<Int>,
+        inputPreferred: Int? = null,
+        outputPreferred: Int? = null,
+        inputRates: List<Int> = emptyList(),
+    ): Int? {
+        if (available.isEmpty()) return null
+        val native = available.filter { !needsConversion(it, inputRates) }
+        val pool = native.ifEmpty { available }
+        inputPreferred?.let { if (it in pool) return it }
+        outputPreferred?.let { if (it in pool) return it }
+        return pool.max()
+    }
+
+    /**
+     * The sentence shown when the two endpoints share no rate and the backend does not convert.
      *
      * It has to name the real constraint. The failure this replaces told the user to "select
      * 44100 Hz in Windows sound settings" for an HDMI output that is physically incapable of
@@ -91,9 +139,28 @@ object SampleRates {
         outputName: String,
         outputRates: List<Int>,
     ): String = "$inputName supports ${describe(inputRates)} and $outputName supports " +
-        "${describe(outputRates)}, so there is no rate they share. Choose a different pair — " +
-        "Omega will not resample between them, because that would cost more latency than this " +
-        "backend saves."
+        "${describe(outputRates)}, so there is no rate they share, and this driver path does not " +
+        "convert between them. Choose a different pair, or a driver that does."
+
+    /** What the converter adds, in milliseconds: half its filter, at the input's rate. */
+    fun conversionMs(inputRate: Int): Float =
+        if (inputRate <= 0) 0f else Resampler.DEFAULT_TAPS / 2f * 1000f / inputRate
+
+    /** The converter's delay in frames **at the engine's rate**, for `adapterLatencyFrames`. */
+    fun conversionFrames(inputRate: Int, rate: Int): Int =
+        if (inputRate <= 0) 0 else Math.round(Resampler.DEFAULT_TAPS / 2f * rate / inputRate)
+
+    /**
+     * The sentence that explains a `C` beside the rate: which device is being converted, from what,
+     * to what, and the cost. Shown before Start when a converted rate is picked and again when the
+     * stream is running.
+     */
+    fun conversionNote(inputName: String, inputRate: Int, rate: Int): String =
+        "$inputName runs at ${format(inputRate)} and is converted to ${format(rate)} on the way in, " +
+            "adding ${String.format("%.1f", conversionMs(inputRate))} ms."
+
+    /** "48 kHz", or "48 kHz C" when reaching it means converting the input. */
+    fun label(rate: Int, converted: Boolean): String = if (converted) "${format(rate)} C" else format(rate)
 
     /** "48 kHz", "44.1 kHz", "44.1 or 48 kHz", "44.1, 48 or 96 kHz". */
     fun describe(rates: List<Int>): String {

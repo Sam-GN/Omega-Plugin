@@ -92,10 +92,11 @@ Those are the driver's own figures. For a true cable-to-cable measurement, patch
 output back into the input and run `--measure` (see below).
 
 RATE and BUFFER sit next to each other because both are latency controls: the callback period is
-frames divided by rate, so 128 frames is 2.90 ms at 44.1 kHz and 2.67 ms at 48 kHz. Only rates
-**both** the input and the output accept are offered, and there is no resampler — bridging a
-mismatched pair would cost more latency than this whole backend saves, so the app names the two
-devices and their rates instead.
+frames divided by rate, so 128 frames is 2.90 ms at 44.1 kHz and 2.67 ms at 48 kHz. The rates on
+offer are the output's. A rate marked **C** is one the input cannot do itself — a 44.1 kHz-only
+interface into a 48 kHz-only HDMI output, say — so the input runs at its own rate and is converted
+on the way in, which adds about 0.7 ms; the status line says which device and how much. The output
+is never converted. On ASIO the interface is both ends and there is one rate.
 
 ## If it sounds wrong
 

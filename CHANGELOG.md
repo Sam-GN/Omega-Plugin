@@ -9,6 +9,52 @@ unverified, it says so.
 
 ---
 
+## [1.6.0-beta] — 2026-10-30
+
+### Added — a 44.1 kHz input works with a 48 kHz output, and the other way round
+
+The rate picker now offers the output's rates. One the input cannot do itself is marked **C**: the
+input opens at its own rate and is converted on the way in, through the same fixed-ratio filter the
+amp and the loop box already use. The status line names the device, both rates and the cost, which
+is half the filter — 0.7 ms at 44.1 kHz — and the figure is counted in the reported round trip. The
+output is never converted: the round trip is set by the hardware's periods in time, and the
+engine's rate only changes how many frames that is. A rate the input can do natively is still
+preferred when both are on offer.
+
+This is the WASAPI path, exclusive and shared; shared mode is where it matters most, since there
+each device runs at whatever Windows set it to and a USB microphone at 44.1 kHz with speakers at
+48 kHz was simply refused. ASIO is one device at one rate and is untouched. ALSA still offers only
+rates both devices share — see `docs/known-issues.md` §7.
+
+Up to 1.5.x the rule was never to resample, on the belief that a converter would cost more than
+the backend saved. Measured against this filter it is a fraction of the ring hop that was already
+there. Nine new tests; the pair that used to be refused now negotiates at 48 kHz with the input
+converted.
+
+---
+
+## [1.5.10-beta] — 2026-10-30
+
+### Changed — the loop box opens paused
+
+Switching loop mode on used to put the transport in play, with the button reading PAUSE, before
+there was anything to play. It now opens paused and the button reads PLAY; REC or PLAY starts it.
+
+---
+
+## [1.5.9-beta] — 2026-10-30
+
+### Fixed — every button registers every click
+
+The loop box's buttons, a pedal's LOAD and ✕, the strip's eye, loop and fork, the pop-out and the
+title bar's three buttons acted on AWT's click event, which only arrives when the pointer did not
+move a pixel between the press and the release. A firm press that drifts was press, drag, release
+and nothing happened, so a click in so many had to be made twice. They now fire on the release when
+it lands inside the button, as Start and Rescan already did and as a native button does. Dragging
+off before releasing still cancels.
+
+---
+
 ## [1.5.8-beta] — 2026-10-30
 
 ### Fixed — a new lane's ✕ no longer arrives lit

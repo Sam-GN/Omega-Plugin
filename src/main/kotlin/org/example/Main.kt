@@ -614,7 +614,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     val inputCaps = backend.capabilities(input)
     val outputCaps = if (single || output.id == input.id) inputCaps else backend.capabilities(output)
     val shared = if (single || output.id == input.id) inputCaps.sampleRates
-    else SampleRates.common(inputCaps.sampleRates, outputCaps.sampleRates)
+    else SampleRates.offer(inputCaps.sampleRates, outputCaps.sampleRates, backend.convertsInput)
 
     if (shared.isEmpty()) {
         println(SampleRates.noOverlapMessage(input.name, inputCaps.sampleRates, output.name, outputCaps.sampleRates))
@@ -629,6 +629,11 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     if (rateOverride != null && rateOverride !in shared) {
         println("note    : ${SampleRates.format(rateOverride)} is not shared by both devices; " +
             "they offer ${SampleRates.describe(shared)}. Using ${SampleRates.format(rate)}.")
+    }
+
+    if (!single && output.id != input.id && SampleRates.needsConversion(rate, inputCaps.sampleRates)) {
+        val captureRate = SampleRates.captureRate(rate, inputCaps.sampleRates, inputCaps.preferredSampleRate)
+        println("input   : C — ${SampleRates.conversionNote(input.name, captureRate, rate)}")
     }
 
     val caps = backend.capabilities(input, rate)
@@ -736,7 +741,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     // which is the costlier path — and a fourth recording, which is every lane doing something at
     // once and so the most the looper can cost. The lanes are filled after `engine.start`, because
     // `prepare` is what sizes them for the rate the device granted.
-    val looper = if (pedals.isNotEmpty()) org.example.dsp.loop.Looper().apply { enabled = true } else null
+    val looper = if (pedals.isNotEmpty()) org.example.dsp.loop.Looper().apply { enabled = true; playing = true } else null
     if (looper != null) println("loop    : three lanes playing (one through the boards), a fourth recording")
     val engine = AudioEngine(chain, second = second, post = post, looper = looper)
     engine.split = split

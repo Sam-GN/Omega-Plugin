@@ -42,6 +42,7 @@ import org.example.audio.StreamRequest
 import org.example.audio.win.ComObject
 import org.example.audio.win.Rt
 import org.example.audio.win.hrName
+import org.example.dsp.Resampler
 import org.example.util.Log
 
 /**
@@ -74,6 +75,12 @@ internal val CANDIDATE_RATES = listOf(44_100, 48_000, 88_200, 96_000)
  *   [close] releases in a `finally` and the app exits deliberately.
  */
 open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : AudioBackend {
+
+    /**
+     * Two endpoints, two clocks, a ring between them: the capture side can run at its own rate
+     * and be converted on the way into the ring. See [WasapiStream.captureLoop] and `SampleRates`.
+     */
+    override val convertsInput: Boolean get() = true
 
     private val shared get() = shareMode == WasapiIds.SHARED
 
@@ -399,26 +406,41 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
         // it up, kept its old period, and broke up three hundred times a second. Probing must happen
         // before `streaming` is set, because the probe itself opens the device.
         val rate = request.sampleRate
-        val inSizes = capabilities(input, rate).bufferSizes
+        // The input opens at the engine's rate when it can and at its own when it cannot, to be
+        // converted on the way into the ring. `capabilities` probed its sizes at exactly that
+        // fallback — its preferred rate — which is what `captureRate` returns, so the sizes agree.
+        val inCaps = capabilities(input, rate)
+        val captureRate = SampleRates.captureRate(rate, inCaps.sampleRates, inCaps.preferredSampleRate)
+        val inSizes = inCaps.bufferSizes
         val outSizes = capabilities(output, rate).bufferSizes
         if (inSizes.isEmpty() || outSizes.isEmpty()) {
             val bad = if (inSizes.isEmpty()) input else output
+            val badRate = if (inSizes.isEmpty()) captureRate else rate
             throw AudioBackendException(
                 if (shared) {
-                    "${bad.name} would not open in shared mode at ${SampleRates.format(rate)}."
+                    "${bad.name} would not open in shared mode at ${SampleRates.format(badRate)}."
                 } else {
-                    "${bad.name} has no usable buffer size at ${SampleRates.format(rate)} in " +
+                    "${bad.name} has no usable buffer size at ${SampleRates.format(badRate)} in " +
                         "exclusive mode — its driver does not honour any size offered. Use a " +
                         "different device, or ASIO if your interface has a driver for it."
                 }
             )
         }
-        val captureFrames = inSizes.minByOrNull { kotlin.math.abs(it - request.bufferFrames) }!!
+        // The buffer request is in engine frames; the capture side's sizes are at its own rate.
+        val wantCapture = Math.round(request.bufferFrames.toFloat() * captureRate / rate)
+        val captureFrames = inSizes.minByOrNull { kotlin.math.abs(it - wantCapture) }!!
         val renderFrames = outSizes.minByOrNull { kotlin.math.abs(it - request.bufferFrames) }!!
+        if (captureRate != rate) {
+            Log.info(
+                "wasapi",
+                "${input.name} does not do $rate Hz; opening it at $captureRate Hz and converting " +
+                    "(+${"%.2f".format(SampleRates.conversionMs(captureRate))} ms).",
+            )
+        }
 
         streaming = true
         return WasapiStream(
-            input, output, request, callback, events, captureFrames, renderFrames, shareMode,
+            input, output, request, callback, events, captureFrames, renderFrames, captureRate, shareMode,
         ) {
             streaming = false
             // Runs on whoever closed the stream, never on an audio thread — the render and capture
@@ -479,6 +501,8 @@ internal class WasapiStream(
     /** Size this endpoint accepts, per direction — they need not be equal. */
     private val captureTargetFrames: Int,
     private val renderTargetFrames: Int,
+    /** The capture endpoint's own rate. Differs from the request's when the input is converted. */
+    private val captureRate: Int,
     private val shareMode: Int,
     private val onClosed: () -> Unit,
 ) : AudioStream {
@@ -541,13 +565,18 @@ internal class WasapiStream(
         opened = true
 
         val rate = negotiatedRate
+        // Capture figures are in the capture endpoint's own frames; report them in engine frames.
+        val captureInEngineFrames = Math.round(captureFrames.toFloat() * rate / captureRate)
         format = StreamFormat(
             sampleRate = rate,
             bufferFrames = renderFrames,
-            inputLatencyFrames = ((captureLatency100ns * rate) / 10_000_000L).toInt().coerceAtLeast(captureFrames),
+            inputLatencyFrames = ((captureLatency100ns * rate) / 10_000_000L).toInt().coerceAtLeast(captureInEngineFrames),
             outputLatencyFrames = ((renderLatency100ns * rate) / 10_000_000L).toInt().coerceAtLeast(renderFrames),
-            // The hop across the ring between two unlocked clocks. Declared, not hidden.
-            adapterLatencyFrames = renderFrames,
+            // The hop across the ring between two unlocked clocks, plus the converter when the input
+            // runs at its own rate. Declared, not hidden.
+            adapterLatencyFrames = renderFrames +
+                if (captureRate != rate) SampleRates.conversionFrames(captureRate, rate) else 0,
+            inputRate = captureRate,
         )
     }
 
@@ -586,7 +615,9 @@ internal class WasapiStream(
             var channels = 0
             var bits = 0
             var isFloat = false
-            val rate = request.sampleRate
+            // The render side is the engine's rate; the capture side is its own, converted on the
+            // way into the ring when the two differ.
+            val rate = if (isRender) request.sampleRate else captureRate
 
             if (shared) {
                 val mix = ac.mixFormat()
@@ -642,7 +673,7 @@ internal class WasapiStream(
                         "device pair that shares one."
                 )
             }
-            negotiatedRate = rate
+            if (isRender) negotiatedRate = rate
 
             val flags = WasapiIds.STREAMFLAGS_EVENTCALLBACK or WasapiIds.STREAMFLAGS_NOPERSIST
             // Tracked exactly, in frames. Recomputing it back out of the 100 ns duration truncates:
@@ -725,7 +756,7 @@ internal class WasapiStream(
             ready.countDown()
 
             if (isRender) renderLoop(ac, service, event, frames, channels, bits, isFloat)
-            else captureLoop(ac, service, event, channels, bits, isFloat)
+            else captureLoop(ac, service, event, frames, channels, bits, isFloat)
 
             // The render loop can stop itself when it detects the device consuming slower than it
             // asks. Surface that the same way any other device fault is surfaced.
@@ -747,13 +778,32 @@ internal class WasapiStream(
         }
     }
 
-    private fun captureLoop(ac: AudioClient, cc: ComObject, event: WinNT.HANDLE, channels: Int, bits: Int, isFloat: Boolean) {
+    /**
+     * Fills the ring from the capture endpoint. When that endpoint runs at a rate of its own, each
+     * packet goes through a fixed-ratio [Resampler] first — the ratio between two nominal rates is
+     * exact, and the ppm by which the two crystals actually disagree is the render loop's drift
+     * correction's business, exactly as it is when the rates match. Everything the converter needs
+     * is allocated here, before the loop, on this thread while it may still allocate.
+     */
+    private fun captureLoop(
+        ac: AudioClient,
+        cc: ComObject,
+        event: WinNT.HANDLE,
+        frames: Int,
+        channels: Int,
+        bits: Int,
+        isFloat: Boolean,
+    ) {
         val pdata = PointerByReference()
         val pframes = IntByReference()
         val pflags = IntByReference()
         val devPos = Memory(8)
         val qpc = Memory(8)
         val nextPacket = IntByReference()
+        val engineRate = request.sampleRate
+        val converter = if (captureRate != engineRate) Resampler(captureRate.toFloat(), engineRate.toFloat(), frames) else null
+        val raw = if (converter != null) FloatArray(frames) else null
+        val converted = if (converter != null) FloatArray(converter.maxOutputFrames) else null
         ac.start()
         while (running) {
             if (Kernel32.INSTANCE.WaitForSingleObject(event, 1_000) != 0) continue
@@ -773,11 +823,28 @@ internal class WasapiStream(
                 if (pflags.value and 0x1 != 0 && primed) xruns++
                 val buf = pdata.value
                 var w = ringWrite
-                if (buf != null) {
-                    val ch = request.inputChannel.coerceIn(0, channels - 1)
-                    for (f in 0 until n) ring[w++ and ringMask] = readSample(buf, f * channels + ch, bits, isFloat)
+                val ch = request.inputChannel.coerceIn(0, channels - 1)
+                if (converter == null) {
+                    if (buf != null) {
+                        for (f in 0 until n) ring[w++ and ringMask] = readSample(buf, f * channels + ch, bits, isFloat)
+                    } else {
+                        for (f in 0 until n) ring[w++ and ringMask] = 0f
+                    }
                 } else {
-                    for (f in 0 until n) ring[w++ and ringMask] = 0f
+                    // In slices no larger than the converter was sized for: a shared-mode packet is
+                    // at most the buffer, but the loop should not depend on that.
+                    var done = 0
+                    while (done < n) {
+                        val take = minOf(n - done, raw!!.size)
+                        if (buf != null) {
+                            for (f in 0 until take) raw[f] = readSample(buf, (done + f) * channels + ch, bits, isFloat)
+                        } else {
+                            for (f in 0 until take) raw[f] = 0f
+                        }
+                        val produced = converter.process(raw, take, converted!!)
+                        for (f in 0 until produced) ring[w++ and ringMask] = converted[f]
+                        done += take
+                    }
                 }
                 ringWrite = w
                 cc.call(4, n)

@@ -159,9 +159,20 @@ data class StreamFormat(
     /** Driver-reported. ASIO `getLatencies`; WASAPI `GetStreamLatency` plus the period. */
     val inputLatencyFrames: Int,
     val outputLatencyFrames: Int,
-    /** What this adapter added itself: zero for a true duplex callback, the cushion for Java Sound. */
+    /**
+     * What this adapter added itself: zero for a true duplex callback, the ring hop on a two-clock
+     * backend, the cushion for Java Sound — plus the input converter's delay when [inputRate]
+     * differs.
+     */
     val adapterLatencyFrames: Int,
+    /**
+     * The rate the capture endpoint actually runs at. Equal to [sampleRate] unless the backend is
+     * converting the input, which the picker marks with a `C` and the status line explains.
+     */
+    val inputRate: Int = sampleRate,
 ) {
+    val inputConverted: Boolean get() = inputRate != sampleRate
+
     val callbackPeriodMs: Float get() = bufferFrames * 1000f / sampleRate
 
     /**
@@ -245,6 +256,13 @@ interface AudioBackend {
      *   may ignore it.
      */
     fun capabilities(device: BackendDevice, sampleRate: Int? = null): DeviceCapabilities
+
+    /**
+     * Whether this backend will open the input at its own rate and convert it to the requested one
+     * when the two differ. True for the two-clock backends that have the converter in their capture
+     * path; false means the picker offers only rates both endpoints share. See `SampleRates`.
+     */
+    val convertsInput: Boolean get() = false
 
     /** @throws AudioBackendException with a sentence a user can act on. */
     fun open(request: StreamRequest, callback: AudioCallback, events: StreamEvents): AudioStream

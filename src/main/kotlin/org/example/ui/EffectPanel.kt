@@ -242,11 +242,8 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
                     hover = false
                     repaint()
                 }
-
-                override fun mouseClicked(e: MouseEvent) {
-                    if (isEnabled) onClick()
-                }
             })
+            Clicks.onRelease(this) { onClick() }
         }
 
         /**
@@ -616,9 +613,8 @@ class EffectPanel(val effect: AudioProcessor) : JPanel(BorderLayout(0, 8)) {
                     hover = false
                     repaint()
                 }
-
-                override fun mouseClicked(e: MouseEvent) = onClick()
             })
+            Clicks.onRelease(this, enabled = { true }) { onClick() }
         }
 
         private fun resize() {

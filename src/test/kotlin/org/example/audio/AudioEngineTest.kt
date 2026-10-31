@@ -334,6 +334,7 @@ class AudioEngineTest {
         val looper = Looper()
         looper.prepare(4_096f) // a small lane, so the first recording fills and sets the loop quickly
         looper.enabled = true
+        looper.playing = true
         val engine = AudioEngine(EffectChain(listOf(Gainer(0.5f))), post = EffectChain(listOf(Gainer(0.5f))), looper = looper)
         val input = FloatArray(64) { 0.8f }
         val output = FloatArray(64)
@@ -361,6 +362,7 @@ class AudioEngineTest {
         val looper = Looper()
         looper.prepare(44_100f)
         looper.enabled = true
+        looper.playing = true
         looper.laneCount = 4
         val engine = splitEngineWithLooper(looper)
         engine.split = true
