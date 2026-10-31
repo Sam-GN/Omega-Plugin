@@ -9,6 +9,60 @@ unverified, it says so.
 
 ---
 
+## [1.7.0-beta] — 2026-10-31
+
+### Added — ALSA converts a mismatched input, as WASAPI does
+
+A pair with no rate in common — the Pocket Master at 44.1 kHz only into a Razer headset at 48 kHz
+only, both direct — used to be refused by name on ALSA. The rate picker now offers the output's
+rates there too, marks one the input cannot do with **C**, and the input runs at its own rate and is
+converted on the way in, through the same fixed-ratio `Resampler` WASAPI uses.
+
+ALSA's loop is read a period, process it, write a period, and a converted period is never a whole
+engine period, so a converted stream runs a second loop: the output's clock drives it, the input is
+read in smaller periods of its own and converted into a reservoir, and exactly one period comes out
+each time. The reservoir keeps its level inside a window by holding back or skipping one frame a
+period, which takes up the drift between the two devices' crystals as well. Its depth and the
+converter's delay are counted in the reported round trip. A pair that shares a rate runs the same
+loop it always has.
+
+Measured with `--selftest --chain --stress`, 60 s:
+
+| Pair | Rate | Round trip | xruns |
+| --- | --- | ---: | ---: |
+| HDA in, HDMI out, same rate — the unchanged path | 48 kHz, 256 | 16.00 ms | 0 |
+| Pocket Master (44.1 only) in, HDMI out | 48 kHz C, 256 | 16.40 ms | 0 |
+| Razer microphone (48 only) in, HDMI out | 44.1 kHz C, 256 | 20.43 ms | 0 |
+
+Pocket Master into the Razer itself, output silenced: 0 xruns in 120 s, realtime 1.0000. At 96 kHz
+and 512 frames the converted path dropped out in one run of two — as did the unconverted one on the
+same card, so that is the card's limit, not the converter's.
+
+A USB output takes several periods in a burst as it starts, and the reservoir can come up a few
+frames short in the first third of a second. That is counted as start-up, as the other counters
+already treat it, not as a dropout.
+
+`docs/known-issues.md` §7 is closed and removed. Seven new tests, 388.
+
+### Fixed — the opening on Linux
+
+On Linux a white rectangle came up before the logo, and the board jumped about a few times after
+the window appeared. Both were X11 asking for a window's paint as a separate event, later than
+Windows does. Measured on KDE Plasma:
+
+- The splash was mapped about half a second before it was first painted — the time the main window
+  takes to build, in the X server's default white. It now has the background colour from the start,
+  and the window is built only once the splash has painted (17-22 ms after it appears).
+- The session restore, which reorders pedals and fades slots in, could run before the window's
+  first paint and always ran as the veil lifted. Early frames on Linux cost 45-65 ms, so those
+  animations outlasted the 280 ms fade. The veil now holds the logo until nothing in the window has
+  moved for 150 ms — about 0.8 s after the window opens — and fades a snapshot, one image copy a
+  frame. No pedal moves after the fade begins.
+
+Windows takes the same path it did; every change is behind the Linux check.
+
+---
+
 ## [1.6.2-beta] — 2026-10-30
 
 ### Added — the opening

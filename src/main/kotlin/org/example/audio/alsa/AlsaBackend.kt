@@ -43,6 +43,8 @@ import org.example.audio.alsa.AlsaApi.Companion.EPIPE
 import org.example.audio.alsa.AlsaApi.Companion.ESTRPIPE
 import org.example.audio.linux.LinuxPlatform
 import org.example.audio.linux.LinuxRt
+import org.example.dsp.Resampler
+import org.example.util.Log
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -71,6 +73,12 @@ import java.nio.ByteOrder
 class AlsaBackend : AudioBackend {
 
     override val id = BackendId.ALSA
+
+    /**
+     * A capture PCM at a rate of its own is converted on the way into a [CaptureReservoir], and the
+     * output's clock drives the loop. Same-rate pairs keep the lockstep loop, untouched.
+     */
+    override val convertsInput: Boolean get() = true
 
     override val availability: Availability = run {
         when {
@@ -219,6 +227,22 @@ class AlsaBackend : AudioBackend {
         if (live != null) throw AudioBackendException("An ALSA stream is already open")
         val input = request.input ?: throw AudioBackendException("No input chosen")
         val output = request.output ?: throw AudioBackendException("No output chosen")
+
+        // The input opens at the engine's rate when it can and at its own when it cannot.
+        // `capabilities` probed its sizes at exactly that fallback — its preferred rate — which is
+        // what `captureRate` returns, so the sizes below are sizes at the rate it will run at.
+        val rate = request.sampleRate
+        val inCaps = capabilities(input, rate)
+        val captureRate = SampleRates.captureRate(rate, inCaps.sampleRates, inCaps.preferredSampleRate)
+        val capturePeriod = if (captureRate == rate) request.bufferFrames else {
+            Log.info(
+                "alsa",
+                "${input.name} does not do $rate Hz; opening it at $captureRate Hz and converting " +
+                    "(+${"%.2f".format(SampleRates.conversionMs(captureRate))} ms).",
+            )
+            convertedCapturePeriod(request.bufferFrames, rate, captureRate, inCaps.bufferSizes)
+        }
+
         val stream = AlsaStream(
             captureName = split(input.id).first,
             captureLabel = input.name,
@@ -226,8 +250,10 @@ class AlsaBackend : AudioBackend {
             playbackLabel = output.name,
             inputChannel = request.inputChannel,
             outputChannels = request.outputChannels.copyOf(),
-            rate = request.sampleRate,
+            rate = rate,
             period = request.bufferFrames,
+            captureRate = captureRate,
+            capturePeriod = capturePeriod,
             callback = callback,
             events = events,
         )
@@ -262,6 +288,23 @@ class AlsaBackend : AudioBackend {
     }
 }
 
+/**
+ * The capture period for a converted input: about half an output period, from the sizes the input
+ * actually accepts at its own rate.
+ *
+ * Half, because the converted input arrives in lumps of one capture period, and the reservoir has
+ * to hold a lump's worth on top of a period to ride them out. A smaller lump is a shallower
+ * reservoir, which is latency saved; [MIN_CAPTURE_PERIOD] keeps it above the bus's own granularity.
+ */
+internal fun convertedCapturePeriod(period: Int, rate: Int, captureRate: Int, sizes: List<Int>): Int {
+    val equivalent = Math.round(period.toFloat() * captureRate / rate)
+    val target = maxOf(MIN_CAPTURE_PERIOD, equivalent / 2)
+    return sizes.filter { it <= target }.maxOrNull() ?: sizes.minOrNull() ?: equivalent
+}
+
+/** Below this a USB capture period is a bus frame or two, and not worth the wakeups. */
+private const val MIN_CAPTURE_PERIOD = 32
+
 internal fun openPcm(name: String, stream: Int): Pointer? = openPcmOrError(name, stream).first
 
 /** The handle, or the reason it could not be had — phrased for the person looking at the picker. */
@@ -290,6 +333,12 @@ internal fun openPcmOrError(name: String, stream: Int): Pair<Pointer?, String?> 
  *
  * Both PCMs are opened non-blocking and waited on with `snd_pcm_wait`, which has a timeout. A
  * blocking read on a card that has just been unplugged can stay blocked; this loop cannot.
+ *
+ * **When the input runs at a rate of its own** ([captureRate] differs from [rate]) the lockstep
+ * cannot work: a converted period is never a whole engine period. Then the output's clock drives
+ * [convertingLoop] instead, and the input goes through a fixed-ratio [Resampler] into a
+ * [CaptureReservoir], which also takes up the drift between the two crystals. The same-rate path is
+ * the loop above and behaves exactly as it did; the two share only the write and the counters.
  */
 internal class AlsaStream(
     private val captureName: String,
@@ -300,6 +349,10 @@ internal class AlsaStream(
     private val outputChannels: IntArray,
     private val rate: Int,
     private val period: Int,
+    /** The capture PCM's own rate. Equal to [rate] unless the input is converted. */
+    private val captureRate: Int = rate,
+    /** The capture PCM's period, in its own frames. Equal to [period] unless converted. */
+    private val capturePeriod: Int = period,
     private val callback: AudioCallback,
     private val events: StreamEvents,
 ) : AudioStream {
@@ -324,11 +377,21 @@ internal class AlsaStream(
     private var inFrameBytes = 0
     private var outFrameBytes = 0
 
+    /** Playback `avail` at which the converting loop writes: the queue is down to one period. */
+    private var playbackReadyAt = 0L
+
     /** Which interleaved slots of the output frame carry the signal. Precomputed; no search per sample. */
     private lateinit var outMask: BooleanArray
 
     private val inputBlock = FloatArray(period)
     private val outputBlock = FloatArray(period)
+
+    // Converting only. Built here, on the opening thread, so the loop allocates nothing.
+    private val converter =
+        if (captureRate != rate) Resampler(captureRate.toFloat(), rate.toFloat(), capturePeriod) else null
+    private val rawInput = FloatArray(if (converter != null) capturePeriod else 0)
+    private val convertedInput = FloatArray(converter?.maxOutputFrames ?: 0)
+    private val reservoir = converter?.let { CaptureReservoir(period, it.maxOutputFrames) }
     private val periodNanos = period * 1_000_000_000L / rate
     private val waitMillis = maxOf(20, (period * 4000L / rate).toInt())
 
@@ -338,6 +401,11 @@ internal class AlsaStream(
 
     @Volatile
     override var deadlineMisses: Int = 0
+        private set
+
+    /** Frames the reservoir held back or skipped against drift. Converting only. */
+    @Volatile
+    var driftCorrections: Int = 0
         private set
 
     @Volatile
@@ -385,14 +453,25 @@ internal class AlsaStream(
         val (p, pErr) = openPcmOrError(playbackName, AlsaApi.STREAM_PLAYBACK)
         playback = p ?: throw AudioBackendException(pErr ?: "Could not open $playbackLabel")
 
-        val cap = setUp(c, captureLabel, needChannels = inputChannel + 1, bufferPeriods = 8)
-        inFormat = cap.first; inChannels = cap.second
-        val play = setUp(p, playbackLabel, needChannels = (outputChannels.maxOrNull() ?: 0) + 1, bufferPeriods = 4)
-        outFormat = play.first; outChannels = play.second
+        // Converted, the input is read once per *output* period in lumps of its own smaller period,
+        // so its buffer is sized to hold eight output periods' worth, as the lockstep's does.
+        val captureBufferPeriods = if (reservoir == null) 8 else {
+            maxOf(8, Math.ceil(8.0 * period * captureRate / rate / capturePeriod).toInt())
+        }
+        val cap = setUp(c, captureLabel, inputChannel + 1, captureRate, capturePeriod, captureBufferPeriods)
+        inFormat = cap.format; inChannels = cap.channels
+        // Driven by the output, the loop must wait until the queue is down to one period before
+        // writing the next, or it would fill the whole buffer and add two periods of latency.
+        val play = setUp(
+            p, playbackLabel, (outputChannels.maxOrNull() ?: 0) + 1, rate, period, bufferPeriods = 4,
+            queueLimit = if (reservoir != null) (PREFILL - 1) * period else null,
+        )
+        outFormat = play.format; outChannels = play.channels
+        playbackReadyAt = play.readyAt
 
         inFrameBytes = inChannels * AlsaApi.bytesPerSample(inFormat)
         outFrameBytes = outChannels * AlsaApi.bytesPerSample(outFormat)
-        inMemory = Memory(period.toLong() * inFrameBytes).apply { clear() }
+        inMemory = Memory(capturePeriod.toLong() * inFrameBytes).apply { clear() }
         outMemory = Memory(period.toLong() * outFrameBytes).apply { clear() }
         inBytes = inMemory.getByteBuffer(0, inMemory.size()).order(ByteOrder.LITTLE_ENDIAN)
         outBytes = outMemory.getByteBuffer(0, outMemory.size()).order(ByteOrder.LITTLE_ENDIAN)
@@ -401,20 +480,49 @@ internal class AlsaStream(
         outMask = BooleanArray(outChannels) { ch -> outputChannels.contains(ch) }
 
         // One card, one clock: link them so they start on the same sample. Refused across cards,
-        // which is fine — then they are started back to back and drift is the price.
-        linked = AlsaLibrary.api.snd_pcm_link(c, p) == 0
+        // which is fine — then they are started back to back and drift is the price. Never when
+        // converting: two rates are two clocks whatever card they are on.
+        linked = reservoir == null && AlsaLibrary.api.snd_pcm_link(c, p) == 0
 
-        format = StreamFormat(
-            sampleRate = rate,
-            bufferFrames = period,
-            inputLatencyFrames = period,
-            outputLatencyFrames = period * PREFILL,
-            adapterLatencyFrames = 0,
-        )
+        format = if (reservoir == null) {
+            StreamFormat(
+                sampleRate = rate,
+                bufferFrames = period,
+                inputLatencyFrames = period,
+                outputLatencyFrames = period * PREFILL,
+                adapterLatencyFrames = 0,
+            )
+        } else {
+            StreamFormat(
+                sampleRate = rate,
+                bufferFrames = period,
+                inputLatencyFrames = Math.round(capturePeriod.toFloat() * rate / captureRate),
+                outputLatencyFrames = period * PREFILL,
+                // The reservoir's depth and the converter's delay. Declared, not hidden.
+                adapterLatencyFrames = reservoir.latencyFrames + SampleRates.conversionFrames(captureRate, rate),
+                inputRate = captureRate,
+            )
+        }
     }
 
-    /** hw and sw parameters for one direction. Returns (format, channels). */
-    private fun setUp(pcm: Pointer, label: String, needChannels: Int, bufferPeriods: Int): Pair<Int, Int> {
+    /** What a PCM was configured to, and the `avail` at which it reports itself ready. */
+    private class Granted(val format: Int, val channels: Int, val readyAt: Long)
+
+    /**
+     * hw and sw parameters for one direction.
+     *
+     * [queueLimit], when given, is the most frames left queued at the moment the PCM reports itself
+     * ready — `avail_min` becomes the rest of the buffer. Without it a PCM is ready at one period.
+     */
+    private fun setUp(
+        pcm: Pointer,
+        label: String,
+        needChannels: Int,
+        rate: Int,
+        period: Int,
+        bufferPeriods: Int,
+        queueLimit: Int? = null,
+    ): Granted {
         val api = AlsaLibrary.api
         val hw = PointerByReference()
         check(api.snd_pcm_hw_params_malloc(hw) >= 0) { "out of memory" }
@@ -452,18 +560,19 @@ internal class AlsaStream(
                 throw AudioBackendException("$label granted a ${bufferFrames.value}-frame buffer, too small for $period-frame periods")
             }
 
+            val availMin = if (queueLimit != null) bufferFrames.value - queueLimit else period.toLong()
             val sw = PointerByReference()
             check(api.snd_pcm_sw_params_malloc(sw) >= 0) { "out of memory" }
             try {
                 api.snd_pcm_sw_params_current(pcm, sw.value)
                 // Never start on our own: the loop starts both sides explicitly, after priming.
                 api.snd_pcm_sw_params_set_start_threshold(pcm, sw.value, bufferFrames.value * 2)
-                api.snd_pcm_sw_params_set_avail_min(pcm, sw.value, period.toLong())
+                api.snd_pcm_sw_params_set_avail_min(pcm, sw.value, availMin)
                 require(api.snd_pcm_sw_params(pcm, sw.value), "refused its software parameters")
             } finally {
                 api.snd_pcm_sw_params_free(sw.value)
             }
-            return format to channels
+            return Granted(format, channels, availMin)
         } finally {
             api.snd_pcm_hw_params_free(params)
         }
@@ -535,6 +644,10 @@ internal class AlsaStream(
             lostCode = -5
             return
         }
+        if (reservoir != null) {
+            convertingLoop(c, p, reservoir)
+            return
+        }
         while (running) {
             // Gather one period of input. Never read until everything still wanted is there: a
             // partial read leaves a remainder smaller than avail_min, and the wait that follows
@@ -576,30 +689,111 @@ internal class AlsaStream(
             }
             val spent = System.nanoTime() - t0
 
-            var put = 0
-            while (put < period && running) {
-                val w = AlsaRt.snd_pcm_writei(p, outAddress + put.toLong() * outFrameBytes, (period - put).toLong())
-                if (w >= 0) {
-                    put += w.toInt()
-                } else if (w == -EAGAIN.toLong()) {
-                    val r = AlsaRt.snd_pcm_wait(p, waitMillis)
-                    if (r < 0) { failed = r; break }
-                } else {
-                    failed = w.toInt(); break
-                }
+            failed = writePeriod(p)
+            if (failed != 0) {
+                if (!recover(c, p, failed)) return
+                continue
             }
+            account(spent)
+        }
+    }
+
+    /**
+     * The loop when the input is converted. The output's clock drives it: wait until the output is
+     * down to one queued period, take in everything the input has produced meanwhile, hand the
+     * engine one period out of the reservoir, write it.
+     */
+    private fun convertingLoop(c: Pointer, p: Pointer, reservoir: CaptureReservoir) {
+        while (running) {
+            val room = AlsaRt.snd_pcm_avail(p)
+            var failed = if (room < 0) room.toInt() else 0
+            if (failed == 0 && room < playbackReadyAt) {
+                // Zero is a timeout: go round and look again, which also notices `running`.
+                val w = AlsaRt.snd_pcm_wait(p, waitMillis)
+                if (w >= 0) continue
+                failed = w
+            }
+            if (failed == 0) failed = drainCapture(c, reservoir)
             if (failed != 0) {
                 if (!recover(c, p, failed)) return
                 continue
             }
 
-            if (settle < SETTLE_PERIODS) settle++
-            else if (firstCallbackNanos == 0L) firstCallbackNanos = System.nanoTime()
-            else framesProcessed += period
-            if (spent > periodNanos) deadlineMisses++
-            val micros = (spent / 1000L).toInt()
-            if (micros > worstCallbackMicros) worstCallbackMicros = micros
+            val t0 = System.nanoTime()
+            // A short period while the stream settles is start-up, not a dropout: a USB output
+            // takes several periods in a burst as it starts, before the input has caught up. Measured
+            // on a Razer headset, once or twice per start, never after. The reservoir refills either
+            // way; only the counting waits for [SETTLE_PERIODS], as the other counters do.
+            if (!reservoir.take(inputBlock) && settle >= SETTLE_PERIODS) xruns++
+            try {
+                callback.render(inputBlock, outputBlock, period)
+                encode()
+            } catch (_: Throwable) {
+                java.util.Arrays.fill(outputBlock, 0f)
+                encode()
+                xruns++
+            }
+            val spent = System.nanoTime() - t0
+            driftCorrections = reservoir.corrections
+
+            failed = writePeriod(p)
+            if (failed != 0) {
+                if (!recover(c, p, failed)) return
+                continue
+            }
+            account(spent)
         }
+    }
+
+    /**
+     * Everything the input has captured since the last look, converted into [reservoir]. Returns 0,
+     * or the ALSA error that stopped it. Bounded: the capture buffer holds at most
+     * [MAX_DRAIN_READS] periods' worth, so a loop that went further would be reading what arrived
+     * while it ran.
+     */
+    private fun drainCapture(c: Pointer, reservoir: CaptureReservoir): Int {
+        val converter = converter!!
+        val offset = inputChannel * AlsaApi.bytesPerSample(inFormat)
+        for (pass in 0 until MAX_DRAIN_READS) {
+            val avail = AlsaRt.snd_pcm_avail(c)
+            if (avail < 0) return avail.toInt()
+            if (avail == 0L) return 0
+            val want = if (avail < capturePeriod) avail else capturePeriod.toLong()
+            val r = AlsaRt.snd_pcm_readi(c, inAddress, want)
+            if (r == -EAGAIN.toLong()) return 0
+            if (r < 0) return r.toInt()
+            val n = r.toInt()
+            AlsaCodec.decode(inBytes, inFormat, inFrameBytes, offset, rawInput, n)
+            reservoir.push(convertedInput, converter.process(rawInput, n, convertedInput))
+        }
+        return 0
+    }
+
+    /** One period from [outAddress] into the playback PCM. Returns 0 or an ALSA error. */
+    private fun writePeriod(p: Pointer): Int {
+        var put = 0
+        while (put < period && running) {
+            val w = AlsaRt.snd_pcm_writei(p, outAddress + put.toLong() * outFrameBytes, (period - put).toLong())
+            if (w >= 0) {
+                put += w.toInt()
+            } else if (w == -EAGAIN.toLong()) {
+                val r = AlsaRt.snd_pcm_wait(p, waitMillis)
+                if (r < 0) return r
+            } else {
+                return w.toInt()
+            }
+        }
+        return 0
+    }
+
+    /** The counters, once a period has gone out. */
+    private fun account(spent: Long) {
+        if (settle < SETTLE_PERIODS) settle++
+        else if (firstCallbackNanos == 0L) firstCallbackNanos = System.nanoTime()
+        else framesProcessed += period
+        if (spent > periodNanos) deadlineMisses++
+        val micros = (spent / 1000L).toInt()
+        if (micros > worstCallbackMicros) worstCallbackMicros = micros
     }
 
     /** An xrun is counted and recovered from; anything else ends the stream and is reported. */
@@ -615,6 +809,9 @@ internal class AlsaStream(
 
     /** Drop, prepare, prime with silence, start. Used for the first start and after every xrun. */
     private fun restart(c: Pointer, p: Pointer): Int {
+        // Whatever was waiting belongs to the stream that just broke; start clean.
+        reservoir?.reset()
+        converter?.reset()
         AlsaRt.snd_pcm_drop(c)
         if (!linked) AlsaRt.snd_pcm_drop(p)
         var e = AlsaRt.snd_pcm_prepare(c)
@@ -651,6 +848,9 @@ internal class AlsaStream(
     private companion object {
         const val PREFILL = 2
         const val SETTLE_PERIODS = 64
+
+        /** Reads per drain: comfortably more than the capture buffer holds in capture periods. */
+        const val MAX_DRAIN_READS = 64
     }
 }
 

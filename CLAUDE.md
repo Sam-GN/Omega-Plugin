@@ -126,6 +126,9 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
   - `audio/alsa/` — Linux's always-present rung: `Default` through the sound server, or `hw:`
     straight to a card. Capture and playback are separate `BackendDevice`s (`in:`/`out:` ids),
     because `capabilities()` must know which direction it is answering for. The thread is ours.
+    A same-rate pair runs in lockstep (read a period, render, write); a converted input runs
+    `convertingLoop`, driven by the output, with the input going through a `Resampler` into a
+    `CaptureReservoir`.
   - `audio/linux/` — `LinuxRt` (realtime via `SCHED_FIFO`, else rtkit over D-Bus) and
     `LinuxPlatform` (the OS check). **They are separate on purpose**: `LinuxRt` declares JNA
     interfaces, so touching it loads JNA, and the OS check is what has to work when JNA does not.
@@ -167,6 +170,16 @@ Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp
   not on `windowOpened`, which arrives while the event thread is still busy behind it. Both
   surfaces draw through `Splash.paint`, which is what keeps them in register. Only the GUI path
   shows it.
+
+  **Linux takes a different route to the same picture, and Windows must not be moved onto it.**
+  X11 maps a window and asks for its paint later, as an event of its own, so on Linux: the splash
+  and the frame get `Theme.BACKGROUND` as their native background (unset, X11 shows white);
+  `main` builds the window only after `Splash.whenPainted`; the restore runs off the veil's first
+  paint rather than an `invokeLater` that could beat it; and `liftVeilSettled` holds the veil until
+  nothing in the window has moved for `VEIL_QUIET_MILLIS`, then fades a snapshot. Early frames
+  there cost 45-65 ms against Windows' few, so the restore's pedal animations used to outlast the
+  fade and play out in jumps. Quiet is judged by component events, not paints — the loop board's
+  lanes repaint thirty times a second regardless. Every branch is behind `LinuxPlatform.isLinux`.
 
   **Borrowed components have to be opted in by name, one at a time.** The dark look is applied per
   instance — `DarkComboBoxUI.install(...)`, `DarkMenu.popup()`, `DarkTextField.style(...)` — not
@@ -314,8 +327,11 @@ sees a JACK entry and the Windows picker is exactly what it was before Linux exi
   which already absorbs uneven counts; the ppm drift between the two crystals is the render loop's
   existing correction, exactly as at equal rates. The output is never converted — the round trip
   is set by the hardware periods in milliseconds and the engine's rate only changes how many
-  frames that is, and the render side has no ring to absorb a resampler's uneven counts. A backend
-  without the converter (ALSA) still offers the intersection and refuses the rest by name. Before
+  frames that is, and the render side has no ring to absorb a resampler's uneven counts. ALSA
+  converts too since 1.7.0, but its lockstep loop has nowhere to put uneven counts either, so a
+  converted ALSA stream runs `convertingLoop` instead: the output drives it and a
+  `CaptureReservoir` holds the converted input, correcting drift by a frame at a time. A backend
+  without the converter (JACK, where the server owns the one rate) offers the intersection. Before
   1.6.0 nothing converted, on the belief that it would cost more than the backend saved; measured,
   it is 32 frames at the input's rate, 0.7 ms, against a ring hop of a whole period. A backend
   that ignores the output's rates will still ask a 48 kHz-only device for 44.1 kHz and then report
@@ -709,9 +725,10 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-381 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+388 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
-it runs on Windows too. The useful patterns are impulse
+it runs on Windows too. `CaptureReservoirTest` drives the converting reservoir with a simulated pair
+of devices whose clocks are set 100 ppm apart, for twenty minutes of periods. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
 extreme settings, and decay over time (`ReverbTest`).
 

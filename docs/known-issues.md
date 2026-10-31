@@ -143,15 +143,3 @@ Three weaknesses, cheapest first, unchanged from the earlier analysis:
    filtering around it.
 
 **Do none of this without a recording from the actual guitar.** That is the whole lesson of §6.1.
-
-## 7. ALSA does not convert a mismatched input
-
-Since 1.6.0 the WASAPI path opens an input at its own rate and converts it to the output's; the
-rate picker marks such a rate `C`. ALSA does not, and a card pair with no rate in common is still
-refused by name. The reason is structural rather than a decision: `AlsaStream` runs capture, the
-engine and playback in lockstep — read one period, render it, write it — and a converter produces
-an uneven number of frames per period, which that loop has nowhere to put. The WASAPI stream has a
-ring between its two threads that absorbs the unevenness for free. Giving ALSA a small input
-reservoir, filled until a whole engine period is available, is the fix; it has not been built
-because the machine this was developed on has one card, so a mismatched pair could not be tested.
-PipeWire users do not hit it: the server converts, and through JACK there is one rate.

@@ -28,6 +28,7 @@ import org.example.audio.Pairing
 import org.example.audio.SampleRates
 import org.example.audio.StreamRequest
 import org.example.audio.Recorder
+import org.example.audio.linux.LinuxPlatform
 import org.example.util.Config
 import org.example.util.CpuUsage
 import org.example.util.Log
@@ -417,7 +418,62 @@ class MainWindow : JFrame("Omega-Plugin") {
     private val veil = object : JComponent() {
         var alpha = 1f
 
-        override fun paintComponent(g: java.awt.Graphics) = Splash.paint(g, width, height, alpha)
+        /** Linux only: run once, on the event queue, after the veil's first paint. See [liftVeilSettled]. */
+        var onFirstPaint: (() -> Unit)? = null
+
+        /** Linux only: set before the window is shown, cleared when the veil has lifted. */
+        var watching = false
+
+        /** When anything in the window last moved or resized; 0 until the veil's first paint. Linux only. */
+        var lastBusyNanos = 0L
+
+        /**
+         * Linux only: the window as it stood when the fade began, which the fade then draws instead
+         * of the window. One image copy per frame rather than a repaint of every pedal under it.
+         */
+        private var snapshot: java.awt.image.BufferedImage? = null
+
+        override fun paintComponent(g: java.awt.Graphics) {
+            snapshot?.let { g.drawImage(it, 0, 0, width, height, null) }
+            Splash.paint(g, width, height, alpha)
+            if (watching && lastBusyNanos == 0L) {
+                lastBusyNanos = System.nanoTime()
+                // Opaque for the first paint only, so the logo is there at once without the whole
+                // board being painted first. After that, see-through at full strength: the board is
+                // painted beneath while the veil holds, which nobody sees, and by the snapshot its
+                // painting is no longer running cold.
+                isOpaque = false
+            }
+            onFirstPaint?.let { action ->
+                onFirstPaint = null
+                SwingUtilities.invokeLater(action)
+            }
+        }
+
+        /** Paints the window beneath into [snapshot], at the screen's own scale so it stays sharp. */
+        fun freeze() {
+            val root = rootPane
+            val transform = graphicsConfiguration?.defaultTransform
+            val sx = transform?.scaleX ?: 1.0
+            val sy = transform?.scaleY ?: 1.0
+            val image = java.awt.image.BufferedImage(
+                kotlin.math.ceil(root.width * sx).toInt().coerceAtLeast(1),
+                kotlin.math.ceil(root.height * sy).toInt().coerceAtLeast(1),
+                java.awt.image.BufferedImage.TYPE_INT_RGB,
+            )
+            val g = image.createGraphics()
+            try {
+                g.scale(sx, sy)
+                root.layeredPane.paint(g)
+            } finally {
+                g.dispose()
+            }
+            snapshot = image
+        }
+
+        fun thaw() {
+            snapshot = null
+        }
     }
 
     private var recorder: Recorder? = null
@@ -566,6 +622,9 @@ class MainWindow : JFrame("Omega-Plugin") {
         // the frame displayable.
         isUndecorated = true
         contentPane.background = Theme.BACKGROUND
+        // What X11 shows between mapping the window and its first paint: the splash's colour, not
+        // the panel grey the frame takes from the theme.
+        if (LinuxPlatform.isLinux) background = Theme.BACKGROUND
         if (AppIcon.images.isNotEmpty()) iconImages = AppIcon.images
 
         val root = JPanel(BorderLayout(0, 14)).apply {
@@ -771,7 +830,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         // Alt+F4 and a WM_CLOSE from outside still arrive here even without a native close button.
         addWindowListener(object : WindowAdapter() {
             override fun windowClosing(e: WindowEvent) = shutdown()
-            override fun windowOpened(e: WindowEvent) = liftVeil()
+            override fun windowOpened(e: WindowEvent) = if (LinuxPlatform.isLinux) liftVeilSettled() else liftVeil()
         })
 
         // The saved driver gets first refusal; if it is gone, this lands on the usual pick and says
@@ -791,10 +850,26 @@ class MainWindow : JFrame("Omega-Plugin") {
         // NAM capture runs its mandatory warm-up, which is tens to hundreds of milliseconds of doing
         // nothing visible. Ahead of the first paint that reads as an application that will not
         // start; behind it, as one that is still settling.
-        if (startupSession != null) SwingUtilities.invokeLater { restoreSound(startupSession) }
+        //
+        // On Linux "after the window is on screen" has to be waited for: X11 asks for the first paint
+        // as an event of its own, which can arrive behind this one, and then the window sat mapped and
+        // unpainted for as long as the restore took. So there it runs off the veil's first paint.
+        if (startupSession != null) {
+            if (LinuxPlatform.isLinux) {
+                veil.onFirstPaint = { restoreSound(startupSession) }
+            } else {
+                SwingUtilities.invokeLater { restoreSound(startupSession) }
+            }
+        }
 
         // Under the veil until the window has opened; `windowOpened` lifts it.
         glassPane = veil
+        // On Linux the veil's first paint is opaque — the logo alone, at once — and the fade is drawn
+        // from a snapshot; see [liftVeilSettled].
+        if (LinuxPlatform.isLinux) {
+            veil.isOpaque = true
+            veil.watching = true
+        }
         veil.isVisible = true
     }
 
@@ -816,6 +891,58 @@ class MainWindow : JFrame("Omega-Plugin") {
             if (t >= 1.0) {
                 timer.stop()
                 veil.isVisible = false
+            }
+        }
+        timer.start()
+    }
+
+    /**
+     * The Linux entrance. Same picture as [liftVeil], different order of events.
+     *
+     * The veil holds at full strength until nothing in the window has moved for
+     * [VEIL_QUIET_MILLIS]: the session restore reorders pedals and fades slots in, and on Linux
+     * the first frames of that are slow enough (45–65 ms measured, against the 280 ms the fade
+     * lasts) that it used to play out in jumps after the veil had gone. Then the window is
+     * painted once into a snapshot and the fade draws that, so every frame of it is one image copy.
+     * [VEIL_HOLD_MILLIS] caps the wait, so something that never stops animating cannot keep the
+     * window hidden.
+     */
+    private fun liftVeilSettled() {
+        // Quiet means nothing in the window moving or resizing — pedals sliding to their places,
+        // slots arriving, the stack making room. Not paints: the loop board's lanes repaint thirty
+        // times a second whether or not anything is happening, and would hold the veil for ever.
+        val busy = java.awt.event.AWTEventListener { event ->
+            val source = event.source as? java.awt.Component ?: return@AWTEventListener
+            if (source === this || SwingUtilities.getWindowAncestor(source) === this) {
+                veil.lastBusyNanos = System.nanoTime()
+            }
+        }
+        toolkit.addAWTEventListener(busy, java.awt.AWTEvent.COMPONENT_EVENT_MASK)
+
+        val holding = System.nanoTime()
+        var started = 0L
+        val timer = Timer(16, null)
+        timer.addActionListener {
+            val now = System.nanoTime()
+            if (started == 0L) {
+                val quiet = veil.onFirstPaint == null && veil.lastBusyNanos != 0L &&
+                    now - veil.lastBusyNanos > VEIL_QUIET_MILLIS * 1_000_000L
+                if (!quiet && now - holding < VEIL_HOLD_MILLIS * 1_000_000L) return@addActionListener
+                toolkit.removeAWTEventListener(busy)
+                veil.freeze()
+                veil.isOpaque = true
+                started = now
+                Splash.dismiss()
+            }
+            val t = ((now - started) / 1_000_000.0 / VEIL_MILLIS).coerceIn(0.0, 1.0)
+            veil.alpha = (1.0 - t).toFloat()
+            veil.repaint()
+            if (t >= 1.0) {
+                timer.stop()
+                veil.isVisible = false
+                veil.isOpaque = false
+                veil.watching = false
+                veil.thaw()
             }
         }
         timer.start()
@@ -3216,6 +3343,12 @@ class MainWindow : JFrame("Omega-Plugin") {
 
         /** The entrance: the veil's fade, logo out and window in, in milliseconds. A breath, not a production. */
         const val VEIL_MILLIS = 280.0
+
+        /** Linux: how long nothing in the window may move before the veil lifts. */
+        const val VEIL_QUIET_MILLIS = 150L
+
+        /** Linux: the longest the veil holds for a quiet board before lifting anyway. */
+        const val VEIL_HOLD_MILLIS = 2_000L
 
         /**
          * How many taps the tempo is averaged over.

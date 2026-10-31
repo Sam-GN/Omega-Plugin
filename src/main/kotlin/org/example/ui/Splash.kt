@@ -19,6 +19,7 @@
  */
 package org.example.ui
 
+import org.example.audio.linux.LinuxPlatform
 import java.awt.AlphaComposite
 import java.awt.Dimension
 import java.awt.Graphics
@@ -26,6 +27,8 @@ import java.awt.Graphics2D
 import java.awt.RenderingHints
 import javax.swing.JComponent
 import javax.swing.JWindow
+import javax.swing.SwingUtilities
+import javax.swing.Timer
 
 /**
  * The opening: the logo dead centre of the screen from the moment `main` reaches Swing until the
@@ -41,6 +44,12 @@ import javax.swing.JWindow
  *
  * Only the GUI path shows it. `--selftest` and friends never reach Swing, and a splash flashing
  * over a terminal would be the wrong kind of memorable.
+ *
+ * **On Linux the paint has to be waited for.** X11 maps a window first and asks for its paint
+ * later, as an event of its own — one that arrives behind the event building the main window, so
+ * the splash sat unpainted for the half second that takes, in the X server's default white.
+ * [whenPainted] is how `main` waits for it there; on Windows the paint arrives in time and the
+ * order is left as it was.
  */
 object Splash {
 
@@ -50,20 +59,55 @@ object Splash {
     /** The splash window's side: the logo with room around it. */
     private const val SIDE = 360
 
+    /** How long [whenPainted] waits for a paint that may never come — a window manager can refuse to show it. */
+    private const val PAINT_WAIT_MILLIS = 400
+
     private var window: JWindow? = null
+    private var painted = false
+    private var afterPaint: (() -> Unit)? = null
 
     fun show() {
         if (window != null) return
         val w = JWindow()
         w.focusableWindowState = false
+        // What X11 fills the window with between mapping it and its first paint. Unset, that is
+        // white: the rectangle that came before the logo.
+        if (LinuxPlatform.isLinux) w.background = Theme.BACKGROUND
         w.contentPane = object : JComponent() {
             init { preferredSize = Dimension(SIDE, SIDE) }
-            override fun paintComponent(g: Graphics) = paint(g, width, height, 1f)
+            override fun paintComponent(g: Graphics) {
+                paint(g, width, height, 1f)
+                if (!painted) {
+                    painted = true
+                    runAfterPaint()
+                }
+            }
         }
         w.pack()
         w.setLocationRelativeTo(null)
         w.isVisible = true
         window = w
+    }
+
+    /**
+     * Runs [action] on the event thread once the splash has been painted — or after
+     * [PAINT_WAIT_MILLIS] if it has not, so a window manager that never shows it cannot hold up
+     * the application. At once if there is no splash or it has already painted.
+     */
+    fun whenPainted(action: () -> Unit) {
+        if (window == null || painted) {
+            SwingUtilities.invokeLater(action)
+            return
+        }
+        afterPaint = action
+        Timer(PAINT_WAIT_MILLIS) { runAfterPaint() }.apply { isRepeats = false }.start()
+    }
+
+    /** Exactly once, whichever of the paint and the timeout gets here first. */
+    private fun runAfterPaint() {
+        val action = afterPaint ?: return
+        afterPaint = null
+        SwingUtilities.invokeLater(action)
     }
 
     fun dismiss() {

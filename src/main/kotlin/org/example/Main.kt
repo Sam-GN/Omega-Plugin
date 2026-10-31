@@ -86,16 +86,23 @@ fun main(args: Array<String>) {
                 // veil then carries it and fades it out. Taken down if the window never arrives, or
                 // a failed start would leave a logo on the desktop with nothing behind it.
                 org.example.ui.Splash.show()
-                // On a second event, not this one: the splash is painted when the event thread
-                // next comes free, and building the window takes half a second of it. Shown and
-                // built in one event, the splash's first paint would land after the window's.
-                SwingUtilities.invokeLater {
+                val build = {
                     try {
                         MainWindow().isVisible = true
                     } catch (t: Throwable) {
                         org.example.ui.Splash.dismiss()
                         throw t
                     }
+                }
+                // On a second event, not this one: the splash is painted when the event thread
+                // next comes free, and building the window takes half a second of it. Shown and
+                // built in one event, the splash's first paint would land after the window's.
+                // X11 asks for that paint later still, behind the second event, so on Linux the
+                // window waits for the paint itself.
+                if (org.example.audio.linux.LinuxPlatform.isLinux) {
+                    org.example.ui.Splash.whenPainted(build)
+                } else {
+                    SwingUtilities.invokeLater(build)
                 }
             }
             return
