@@ -823,6 +823,11 @@ class MainWindow : JFrame("Omega-Plugin") {
         updateBoardLevels()
 
         titleBar.onMenuOpening = { menu -> buildPresetMenu(menu) }
+        titleBar.updateHost = object : UpdatePanel.Host {
+            override val window: java.awt.Window get() = this@MainWindow
+            override fun isStreaming(): Boolean = engine.isRunning
+            override fun exitAfterSaving(launch: () -> Unit) = shutdown(launch)
+        }
         reloadPresets(announce = true)
 
         recordButton.isEnabled = false
@@ -1812,7 +1817,14 @@ class MainWindow : JFrame("Omega-Plugin") {
     }
 
     /** The single teardown path: the title bar's close button, Alt+F4 and WM_CLOSE all land here. */
-    private fun shutdown() {
+    /**
+     * The way out, for the ✕, for Exit, and for an update.
+     *
+     * [launch] is the update's last step — start the new copy, or the helper that installs it — and
+     * runs **after** the session and settings are saved and the devices released, so the new
+     * process never reads a session this one is still writing and never finds the interface held.
+     */
+    private fun shutdown(launch: (() -> Unit)? = null) {
         meterTimer.stop()
         // Before anything is torn down, while the combos still hold the selection they are being
         // asked about. A pending coalesced save is superseded rather than raced.
@@ -1829,6 +1841,10 @@ class MainWindow : JFrame("Omega-Plugin") {
         // Under an exclusive-mode backend a device left held can stay stuck until a reboot, so this
         // is more important than it used to be, not less.
         Backends.shutdown()
+        // Before the log closes, so a new copy that would not start is the last thing in it.
+        launch?.let { step ->
+            runCatching(step).onFailure { Log.error("update", "The new copy could not be started.", it) }
+        }
         // After the devices are released, so a backend that hangs on the way out is recorded as
         // having been reached rather than leaving the log ending at "shutting down".
         Log.shutdown()

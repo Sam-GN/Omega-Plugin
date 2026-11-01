@@ -172,6 +172,11 @@ jobs:
           image=$(ls build/distributions/Omega-Plugin-*-Linux.AppImage)
           APPIMAGE_EXTRACT_AND_RUN=1 "$image" --list-backends | tee report.txt
           grep -q "Collector: generational ZGC. Good." report.txt
+          # The one network request a headless run can make, and the proof the bundled runtime can
+          # complete a TLS handshake with GitHub: without jdk.crypto.ec this fails here and nowhere
+          # else. Only reaching GitHub counts — a rate limit from a shared runner address, or an
+          # answer that this build is newer than anything released, is still a pass.
+          APPIMAGE_EXTRACT_AND_RUN=1 "$image" --check-update
 
       - uses: actions/upload-artifact@v4
         with:
@@ -192,10 +197,38 @@ jobs:
     needs: [ version, windows, linux ]
     runs-on: ubuntu-latest
     steps:
+      # For CHANGELOG.md, which the release body is read from.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # SHA256SUMS.txt is what Check for updates verifies a download against before installing it:
+      # HTTPS says the bytes came from GitHub, this says they are the bytes CI built. sha256sum's own
+      # format, so a user can check a download by hand with the same tool.
+      #
+      # The body is the version's own CHANGELOG section — the text between its `## [` heading and
+      # the next `---` — rather than GitHub's generated commit list. The dialog shows the body as
+      # the release notes, and a list of commit titles is noise to a guitarist; the CHANGELOG is
+      # already written for the release page's reader. A version without a section is a failure
+      # here, as a version without a bump is in the version job.
+      - name: Checksums and release notes
+        shell: bash
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          (cd dist && sha256sum Omega-Plugin-*-Windows.zip Omega-Plugin-*-Linux.AppImage > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          version="${TAG#v}"
+          awk -v heading="## [$version]" 'index($0, heading) == 1 { on = 1; next } on && /^---$/ { exit } on' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section headed '## [$version]'. Every release needs one."
+            exit 1
+          fi
+          cat notes.md
 
       - name: Publish the release
         uses: softprops/action-gh-release@v2
@@ -204,11 +237,13 @@ jobs:
           tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ needs.version.outputs.sha }}
           draft: true
-          generate_release_notes: true
-          # One file per platform, deliberately. The audience is guitarists, not developers: a
-          # release page offering a jar, loose launchers and several archives asks a musician to
-          # understand the difference before they can play a note, and the wrong choice fails in a
-          # way that reads as "the app is broken". Each of these needs nothing installed.
+          generate_release_notes: false
+          body_path: notes.md
+          # One file per platform, plus their checksums, deliberately. The audience is guitarists,
+          # not developers: a release page offering a jar, loose launchers and several archives asks
+          # a musician to understand the difference before they can play a note, and the wrong
+          # choice fails in a way that reads as "the app is broken". Each bundle needs nothing
+          # installed; the checksum file is for the program and for anyone who wants to check.
           #
           # Dropping the standalone LICENSE costs nothing under GPLv3: §4 wants the licence *with
           # the program*, and it is inside both (so is README.md, which carries the third-party
@@ -217,3 +252,4 @@ jobs:
           files: |
             dist/Omega-Plugin-*-Windows.zip
             dist/Omega-Plugin-*-Linux.AppImage
+            dist/SHA256SUMS.txt

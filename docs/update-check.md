@@ -1,9 +1,26 @@
 # Check for updates — the two times the program touches the internet
 
-**Status: agreed plan for 1.8.0-beta. Nothing here is built.** Written 2026-10-31 against
-1.7.1-beta, after a design conversation, to be picked up in a later session. Unlike
-`theme-optional.md` and its siblings this is a commitment, not a proposal; what is open is listed
-in §11 and nothing else is.
+**Status: built in 1.8.0-beta, 2026-10-31. This is now history**, the plan the feature was built
+from, kept because it records why each decision went the way it did. Written 2026-10-31 against
+1.7.1-beta after a design conversation. The three open points in §11 were decided as leaned: the
+old AppImage is deleted, the release body is the CHANGELOG section, the proxy flag is on. Where the
+build departed from the text below:
+
+- **Windows unpacks in-process.** §4.3's helper called `Expand-Archive`; the program now expands
+  the zip itself with `java.util.zip` before it exits, so `omega-update.cmd` is plain `cmd` — wait,
+  copy, start, clean up — and needs no PowerShell.
+- **Save before launch.** §4.2 started the new AppImage and then exited through the normal
+  shutdown, which saves the session; the new process would have read a session the old one was
+  still writing. The installer's last step now runs inside the shutdown, after the save and the
+  device release and before the log closes, on both platforms. The child AppImage also gets the
+  runtime's own variables (`APPIMAGE`, `APPDIR`, `OWD`, `ARGV0`) removed from its environment.
+- **Download-only has a destination.** Where the copy cannot replace itself the button reads
+  Download, the verified file goes to the user's Downloads folder (else home), and the line names
+  it with the reason.
+- **A developer override.** `-Domega.update.source=<folder>` answers the two requests and the
+  download from canned files, so the whole path can be driven against a release that does not
+  exist. Nothing shipped sets it; it never touches the network.
+- **The Linux swap is unverified on hardware** at the time of shipping; `known-issues.md` §8.
 
 The idea in one paragraph. The About dialog gets a **Check for updates** button. Pressing it asks
 GitHub for the newest published release and says either "you have the newest version" or shows

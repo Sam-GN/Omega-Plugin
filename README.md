@@ -42,14 +42,29 @@ with `--appimage-extract-and-run` works without.
 Nothing to install on either. Java is inside, so an older Java already on the machine cannot
 interfere.
 
-**Updating** is manual on both: the program does not check for new versions, so look at the Releases
-page now and then. On Windows, unzip the new version and delete the old folder; on Linux, download
-the new AppImage, `chmod +x` it and delete the old file. Nothing is lost: settings and presets live
-in `%APPDATA%\omega-plugin` on Windows and `~/.config/omega-plugin` on Linux, and recordings in an
-`Omega-Plugin` folder on the Desktop or in the home folder, all outside the program itself.
+**Updating.** **☰ → About → Check for updates** asks GitHub for the newest release and, if there is
+one, shows its notes and an **Update** button that downloads it, checks it and replaces the
+installed program in place — the AppImage swaps itself, the Windows folder is refilled so shortcuts
+keep working. The first version that can be updated *into* is the one after 1.8.0-beta. By hand it
+still works the old way: on Windows unzip the new version over the old folder; on Linux download the
+new AppImage, `chmod +x` it and delete the old file. Nothing is lost either way: settings and presets
+live in `%APPDATA%\omega-plugin` on Windows and `~/.config/omega-plugin` on Linux, and recordings in
+an `Omega-Plugin` folder on the Desktop or in the home folder, all outside the program itself.
 
 x64 only, and beta. On Windows it has been played through one audio interface; on Linux it has run
 on one laptop, and no guitar interface has been tried there yet.
+
+## Network
+
+Omega-Plugin never connects to the internet on its own. The only two times it does are the two
+presses under **☰ → About**: **Check for updates**, one request to github.com for the release list,
+and the **Update** button that may follow, which downloads the bundle and its checksum file from the
+same place. Nothing runs at startup, nothing on a timer, nothing when a stream fails.
+
+The one honest caveat: github.com sees the requesting IP address, as it does for any download. Omega
+adds no identifier, no settings and nothing about the machine beyond the user agent GitHub's API
+requires, which is the program's name and version. A test, `NoNetworkOutsideUpdaterTest`, fails the
+build if any code outside the update package so much as names a network type.
 
 ## First run
 

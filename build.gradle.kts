@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "org.example"
-version = "1.7.2-beta"
+version = "1.8.0-beta"
 
 repositories {
     mavenCentral()
@@ -42,9 +42,14 @@ kotlin {
  *   where generational is the only ZGC there is.
  * - `AlwaysPreTouch` so first-touch page faults happen at startup rather than mid-stream.
  * - `-Xss` is left alone; the audio callback stack is shallow.
+ * - `java.net.useSystemProxies` is not a realtime flag, but this is the one list every launcher
+ *   reads, and the JVM honours the system proxy only when told. Check for updates — the only
+ *   network request the program makes, and only on a press — would otherwise fail behind a school
+ *   or office proxy for a reason the user cannot see. Harmless where there is none.
  */
 val gcArgs = listOf(
     "-XX:+IgnoreUnrecognizedVMOptions",
+    "-Djava.net.useSystemProxies=true",
     // Only needed if someone points an old JRE at the launcher: ZGC was experimental before 15, and
     // without this the JVM dies with "must be enabled via -XX:+UnlockExperimentalVMOptions" instead
     // of the honest "unsupported class file version" that follows a moment later.
@@ -187,14 +192,24 @@ tasks.named("build") {
  *   how the allocation assertion in `AudioEngineTest` is measured and how a diagnostic build would
  *   check the same thing in the field.
  *
+ * - `jdk.crypto.ec` — the one socket the program opens, Check for updates on About, is TLS to
+ *   GitHub, whose certificates and key exchange need elliptic curves; on Java 21 that code is a
+ *   module of its own (it folded into `java.base` in 22). Without it the check works under
+ *   `gradlew run` and fails inside every shipped bundle with a handshake error that reads like a
+ *   network fault. The `cacerts` trust store is in `java.base` and already ships. The release
+ *   workflows run `--check-update` from the AppImage for exactly this reason: a bundle that cannot
+ *   complete the handshake fails there and nowhere else.
+ *
  * Not included, deliberately: `jdk.localedata` (the UI is English and CLDR's base data covers it)
- * and the crypto/TLS modules (nothing here opens a socket).
+ * and `java.net.http` (`GitHubSource` uses `HttpsURLConnection` from `java.base` so as not to need
+ * it).
  */
 val portableModules = listOf(
     "java.base",
     "java.desktop",
     "java.logging",
     "java.management",
+    "jdk.crypto.ec",
     "jdk.management",
     "jdk.unsupported",
 ).joinToString(",")

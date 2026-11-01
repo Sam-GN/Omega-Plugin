@@ -78,6 +78,12 @@ class TitleBar(
     /** Called with the empty menu just before it opens, to fill in everything above About. */
     var onMenuOpening: ((JPopupMenu) -> Unit)? = null
 
+    /**
+     * What About's Check for updates needs from the window. Null leaves About without the button,
+     * which is what a secondary window's bar would want if it had a menu at all.
+     */
+    var updateHost: UpdatePanel.Host? = null
+
     private val titleLabel = JLabel(title).apply {
         font = Theme.BODY_FONT
         foreground = Theme.TEXT_DIM
@@ -217,6 +223,9 @@ class TitleBar(
             heading = "Omega-Plugin",
             lines = Licences.about(version),
             link = "User manual" to Licences.MANUAL_URL,
+            // Below the lines, not among them: `Licences.about` answers "what is this and which
+            // version", and the button is the one thing on the dialog that does something.
+            extra = updateHost?.let { UpdatePanel(it) },
         )
     }
 

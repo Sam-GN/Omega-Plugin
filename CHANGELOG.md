@@ -9,6 +9,55 @@ unverified, it says so.
 
 ---
 
+## [1.8.0-beta] — 2026-10-31
+
+### Added — Check for updates on About, the only two times the program touches the internet
+
+**☰ → About** has a **Check for updates** button. Pressing it asks github.com for the release list
+and says either that this is the newest version, or shows the newer one with its release notes and
+an **Update** button. Pressing that downloads the bundle for this platform, verifies it against the
+`SHA256SUMS.txt` every release now carries, saves the session, and replaces the installed program:
+on Linux the AppImage starts the new file and deletes itself; on Windows a small helper waits for
+the program to exit, copies the new bundle **into the installed folder** — so shortcuts and taskbar
+pins keep working — and starts it. Settings, presets, the session and recordings were never inside
+the program folder and are kept. If a stream is running, a dialog says the update will stop the
+sound before anything is downloaded.
+
+**Those two presses are the only times Omega-Plugin connects to anything.** Not at startup, not on
+a timer, not when a stream fails. The promise is written under the button, in README.md's new
+*Network* section, in CLAUDE.md and CONTRIBUTING.md as a rule, and in a test,
+`NoNetworkOutsideUpdaterTest`, which fails the build on any file outside `org.example.update` that
+names a network type. The request carries nothing about the user beyond the user agent GitHub
+requires, which is the program's name and version.
+
+Where the installed copy cannot replace itself — a folder under `Program Files`, a jar, `gradlew run`
+— the button reads **Download** instead, the verified file goes to the Downloads folder, and the line
+under it says why. `docs/known-issues.md` §7.
+
+**This is the first version that can check, so the first it can update *to* is the next one.** A
+copy of 1.7.x cannot update into 1.8.0; download it from the Releases page as before.
+
+**The Linux swap has not run on a real machine yet.** It is tested against a temp folder with the
+launch injected, and nothing else; `docs/known-issues.md` §8. The Windows path was run end to end
+from an extracted bundle on the development machine.
+
+Under the hood: a fourth package, `org.example.update`, with `GitHubSource` the one class that opens
+a socket, over `HttpsURLConnection` so the bundled runtime needs no `java.net.http`. It does need
+**`jdk.crypto.ec`**, now in `portableModules`: GitHub's TLS needs elliptic curves, which on Java 21
+are a module of their own, and without it the check works under `gradlew run` and fails inside every
+bundle with a handshake error that reads like a network fault. A headless **`--check-update`** prints
+what the dialog would show, and both workflows run it from the AppImage so a bundle that cannot
+complete the handshake fails there. The release workflow publishes `SHA256SUMS.txt` beside the two
+bundles and takes the release body from the version's CHANGELOG section instead of GitHub's generated
+commit list, so the release page and the dialog show this text. The launchers set
+`java.net.useSystemProxies=true`, so a machine behind a school or office proxy can reach GitHub.
+`docs/update-check.md`, the plan this was built from, is now history.
+
+Measured: `--check-update` from the 1.8.0-beta jar reached GitHub and reported this copy newer than
+the newest release, 1.7.1-beta, which is the right answer for a build ahead of main.
+
+---
+
 ## [1.7.2-beta] — 2026-10-31
 
 ### Added — a user manual, and a link to it from About

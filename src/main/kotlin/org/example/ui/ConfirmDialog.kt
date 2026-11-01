@@ -135,6 +135,9 @@ object MessageDialog {
      * [link] is a line that opens an address: its text, and the URL. One at most, and after
      * everything else, because the one caller with one — About — has one place to send people.
      *
+     * [extra] is a component shown under everything else — About's update panel — for the one
+     * dialog that does something as well as saying something.
+     *
      * [maxLines] exists for the one caller that is not a list of failures.
      *
      * The cap is there so a folder full of broken presets cannot produce a dialog taller than the
@@ -149,6 +152,7 @@ object MessageDialog {
         lines: List<String>,
         maxLines: Int = MAX_LINES,
         link: Pair<String, String>? = null,
+        extra: JComponent? = null,
     ) {
         val dialog = JDialog(owner, title, Dialog.ModalityType.APPLICATION_MODAL).apply {
             isUndecorated = true
@@ -185,6 +189,11 @@ object MessageDialog {
             if (link != null) {
                 add(javax.swing.Box.createVerticalStrut(GROUP_GAP))
                 add(linkLabel(link.first, link.second))
+            }
+            if (extra != null) {
+                add(javax.swing.Box.createVerticalStrut(GROUP_GAP * 2))
+                extra.alignmentX = 0f
+                add(extra)
             }
         }
 
@@ -226,7 +235,7 @@ object MessageDialog {
      * clipboard instead and the line says so, because a link that silently does nothing is worse
      * than no link.
      */
-    private fun linkLabel(text: String, url: String): JLabel {
+    internal fun linkLabel(text: String, url: String): JLabel {
         val label = JLabel("<html><u>$text</u></html>").apply {
             font = Theme.BODY_FONT
             foreground = Theme.ACCENT

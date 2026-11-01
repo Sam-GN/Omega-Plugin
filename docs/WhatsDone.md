@@ -251,6 +251,14 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **Check for updates, 1.8.0-beta.** About has the button; a newer release shows its notes and an
+  Update button that downloads this platform's bundle, verifies it against the release's
+  `SHA256SUMS.txt`, saves the session and replaces the program — in place on Windows through a
+  helper script that waits for the process, by swapping the AppImage on Linux. Those two presses
+  are the only network access the program has, stated on the dialog, in README.md, in the
+  contributor rules and in `NoNetworkOutsideUpdaterTest`. `docs/update-check.md` was the plan.
+  The Windows path was run end to end from an extracted bundle; the Linux swap is unit-tested only.
+
 ### Closed, with a negative result
 
 - **Low-latency WASAPI shared via `IAudioClient3`.** Built, measured, reverted. Every endpoint on
@@ -274,3 +282,5 @@ Kept rather than deleted, because a record of what was open is part of what this
   xruns per second.
 - `--measure` — true round trip through a physical loopback. Built and tested against synthetic
   delay lines; **never yet run against a real lead**.
+- `--check-update` — what About's Check for updates would say, headlessly. Run by both workflows
+  from the AppImage to prove the bundled runtime can complete a TLS handshake with GitHub.

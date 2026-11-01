@@ -1,0 +1,115 @@
+[
+  {
+    "url": "https://api.github.com/repos/Sam-GN/Omega-Plugin/releases/1004",
+    "html_url": "https://github.com/Sam-GN/Omega-Plugin/releases/tag/v1.7.9-beta",
+    "id": 1004,
+    "tag_name": "v1.7.9-beta",
+    "target_commitish": "main",
+    "name": "v1.7.9-beta",
+    "draft": false,
+    "prerelease": true,
+    "created_at": "2026-11-03T10:00:00Z",
+    "published_at": "2026-11-03T10:05:00Z",
+    "assets": [
+      {
+        "name": "Omega-Plugin-1.7.9-beta-Windows.zip",
+        "size": 61043210,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.7.9-beta/Omega-Plugin-1.7.9-beta-Windows.zip"
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "size": 102,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.7.9-beta/SHA256SUMS.txt"
+      }
+    ],
+    "body": "### Fixed — a hot-fix on the 1.7 line, Windows only\r\n\r\nPublished after 1.8.1 and listed first because of it."
+  },
+  {
+    "url": "https://api.github.com/repos/Sam-GN/Omega-Plugin/releases/1003",
+    "html_url": "https://github.com/Sam-GN/Omega-Plugin/releases/tag/v1.8.1-beta",
+    "id": 1003,
+    "tag_name": "v1.8.1-beta",
+    "target_commitish": "main",
+    "name": "v1.8.1-beta",
+    "draft": false,
+    "prerelease": true,
+    "created_at": "2026-11-02T09:00:00Z",
+    "published_at": "2026-11-02T09:10:00Z",
+    "assets": [
+      {
+        "name": "Omega-Plugin-1.8.1-beta-Windows.zip",
+        "size": 61500000,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.8.1-beta/Omega-Plugin-1.8.1-beta-Windows.zip"
+      },
+      {
+        "name": "Omega-Plugin-1.8.1-beta-Linux.AppImage",
+        "size": 93000000,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.8.1-beta/Omega-Plugin-1.8.1-beta-Linux.AppImage"
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "size": 204,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.8.1-beta/SHA256SUMS.txt"
+      }
+    ],
+    "body": "### Fixed — the first release the program can update itself to\r\n\r\nNotes written in `CHANGELOG.md`, shown here and in the About dialog."
+  },
+  {
+    "url": "https://api.github.com/repos/Sam-GN/Omega-Plugin/releases/1002",
+    "html_url": "https://github.com/Sam-GN/Omega-Plugin/releases/tag/nightly",
+    "id": 1002,
+    "tag_name": "nightly",
+    "target_commitish": "main",
+    "name": "nightly",
+    "draft": false,
+    "prerelease": true,
+    "created_at": "2026-11-01T23:00:00Z",
+    "published_at": "2026-11-01T23:00:00Z",
+    "assets": [],
+    "body": "A tag that is not a version. Skipped, not fatal."
+  },
+  {
+    "url": "https://api.github.com/repos/Sam-GN/Omega-Plugin/releases/1005",
+    "html_url": "https://github.com/Sam-GN/Omega-Plugin/releases/tag/v2.0.0-beta",
+    "id": 1005,
+    "tag_name": "v2.0.0-beta",
+    "target_commitish": "main",
+    "name": "v2.0.0-beta",
+    "draft": true,
+    "prerelease": true,
+    "created_at": "2026-11-04T08:00:00Z",
+    "published_at": null,
+    "assets": [],
+    "body": "A draft. An unauthenticated caller never sees one; if one ever appears it must be ignored."
+  },
+  {
+    "url": "https://api.github.com/repos/Sam-GN/Omega-Plugin/releases/1001",
+    "html_url": "https://github.com/Sam-GN/Omega-Plugin/releases/tag/v1.8.0-beta",
+    "id": 1001,
+    "tag_name": "v1.8.0-beta",
+    "target_commitish": "main",
+    "name": "v1.8.0-beta",
+    "draft": false,
+    "prerelease": true,
+    "created_at": "2026-10-31T22:00:00Z",
+    "published_at": "2026-10-31T22:05:00Z",
+    "assets": [
+      {
+        "name": "Omega-Plugin-1.8.0-beta-Windows.zip",
+        "size": 61000000,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.8.0-beta/Omega-Plugin-1.8.0-beta-Windows.zip"
+      },
+      {
+        "name": "Omega-Plugin-1.8.0-beta-Linux.AppImage",
+        "size": 92000000,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.8.0-beta/Omega-Plugin-1.8.0-beta-Linux.AppImage"
+      },
+      {
+        "name": "SHA256SUMS.txt",
+        "size": 204,
+        "browser_download_url": "https://github.com/Sam-GN/Omega-Plugin/releases/download/v1.8.0-beta/SHA256SUMS.txt"
+      }
+    ],
+    "body": "### Added — Check for updates on About"
+  }
+]

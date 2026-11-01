@@ -27,6 +27,12 @@ other projects:
 bundled content arrives with its own copyright and reopens a question that is currently closed. It
 is why every voice in `dsp/rhythm/` is synthesised.
 
+**No network outside `org.example.update`.** The program promises its users that it connects to
+nothing except on the two presses under About — Check for updates and Update. No file outside that
+package may open a socket or name a JDK network type beyond `java.net.URI`, and the package itself
+acts only on a press: never at startup, never on a timer. `NoNetworkOutsideUpdaterTest` enforces
+the first half mechanically.
+
 ## Building
 
 ```
@@ -90,8 +96,7 @@ than making one slow, so `deadlineMisses` reads zero straight through audible dr
 | --- | --- |
 | `known-issues.md` | Defects in code that **already ships**. Nothing speculative. |
 | `linux-compat.md` | The **work plan** for the Linux port. Numbered; each item says whether it is done. |
-| `low-latency-backend.md`, `virtual-io.md`, `WhatsDone.md` | History and reference. |
-| `update-check.md` | **The agreed plan for 1.8.0**, checking for and applying updates. Not built yet. |
+| `low-latency-backend.md`, `update-check.md`, `virtual-io.md`, `WhatsDone.md` | History and reference. |
 | `theme-optional.md`, `profile-optional.md`, `pickup-optional.md`, `instrument-sampler.md` | **Proposals nobody has promised.** Not a backlog. |
 
 No file in `docs/` uses markdown links; every cross-reference is prose in backticks, which is what

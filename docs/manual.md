@@ -103,11 +103,17 @@ Without it the program still runs, through ALSA. If nothing at all happens when 
 your system may lack FUSE 2; running it with `--appimage-extract-and-run` after the file name works
 without.
 
-**Updating.** The program does not check for new versions. Look at the Releases page now and then.
-On Windows, extract the new zip and delete the old folder. On Linux, download the new AppImage, make
-it executable, and delete the old file. Nothing you made is lost: your settings and presets live in
-a folder of their own, outside the program, and so do your recordings. See
-[Where your files live](#where-your-files-live).
+**Updating.** Open **☰ → About** and press **Check for updates**. The program asks GitHub for the
+newest release, once, and tells you either that you have it or that a newer one exists, with its
+notes and an **Update** button. Press that and it downloads the new version, checks that the file
+is exactly what was published, closes, replaces itself and opens again. On Windows the program
+folder is refilled where it is, so a shortcut or a taskbar pin keeps working. On Linux the new
+AppImage replaces the old file. It never checks on its own; see [The menu](#check-for-updates).
+
+You can still do it by hand: download from the Releases page, and on Windows extract the new zip
+over the old folder, on Linux make the new AppImage executable and delete the old file. Either way
+nothing you made is lost: your settings and presets live in a folder of their own, outside the
+program, and so do your recordings. See [Where your files live](#where-your-files-live).
 
 ## First sound in five steps
 
@@ -593,7 +599,9 @@ Above the rows: a **PLAY / PAUSE** button and a **pop-out** icon.
    recording is the length of the loop.** Every lane after it is that long.
 3. Press REC on lane 2. It waits for the top of the loop, starts recording there exactly, and stops
    by itself when it comes round. You hear lane 1 while you play lane 2, but lane 1 is not recorded
-   into lane 2; a new lane never contains the ones already playing.
+   into lane 2; a new lane never contains the ones already playing. Two exceptions: a lane set to
+   THRU is part of the sound going into the pedals, so it is recorded (see ORDER below); and the
+   metronome's click is never recorded into a lane, however loud it is in your ears.
 4. Repeat for lanes 3 and 4.
 
 One lane records at a time. Pressing REC while the box is paused starts it playing. When every lane is
@@ -619,8 +627,8 @@ refused while a lane is recording.
 
 - Lanes keep their audio when you hide the loop box, pop it out, stop the stream, or change the
   sample rate (they are converted to the new rate). Closing the box stops playback with a fade and
-  keeps the audio. Only quitting the program loses them, so **use SAVE** for anything you want to
-  keep.
+  keeps the audio. Only quitting the program loses them, and **Update** on the About dialog quits
+  it, so **use SAVE** for anything you want to keep.
 - The program remembers whether the box was open, the key bindings, and where the pop-out window
   was. It does not store the audio.
 
@@ -700,6 +708,9 @@ seconds.
   Linux. **☰ → Select Recording Destination…** changes that, permanently, and **☰ → Open Recordings
   Folder** opens it.
 - The stream has to be running. Press Rec again to stop; stopping the stream also stops a recording.
+- The loop box is in the take: every lane that is playing, AFTER or THRU, is recorded with your
+  guitar, because the take is what you hear. The click is not, unless you turn on the drums copy
+  below.
 - If the disk could not keep up, the status line says how much was lost when the take ends.
 - The rhythm section's menu adds a count-in and a drums copy; see
   [The rhythm section](#the--menu).
@@ -751,9 +762,42 @@ Everything under ☰, in order.
 | Logging | A switch. On, the program writes a diagnostic log to `logs/omega.txt` in its settings folder and keeps writing it across restarts, so an intermittent fault can be caught. Off, nothing is written. Off by default. |
 | Open Logs Folder | Opens it. |
 | *N* preset file(s) failed to load… | Only appears when some file in the presets folder could not be read. Lists them. |
-| About Omega-Plugin | The version, the licence in short, and a link to this manual. |
+| About Omega-Plugin | The version, the licence in short, a link to this manual, and **Check for updates**. See below. |
 | Licences | The full copyright and licence notice, and every third-party component with its licence. |
 | Exit | Quits. Stops the stream and finishes any recording first. |
+
+### Check for updates
+
+The program never connects to the internet on its own. The only two times it does are two buttons
+under **☰ → About**, and it says so right under the first of them.
+
+- **Check for updates** asks github.com for the list of releases and compares. Within a second or
+  two the line under the button says one of: you have the newest version; a newer version is
+  available, with its release notes, a **Read more on GitHub** link to the release page and an
+  **Update** button; or it could not reach GitHub and why, in plain words. It sends nothing about
+  you; GitHub sees your address the way it does for any download, and the program's name and
+  version, which is all GitHub requires.
+- **Update** downloads the new version from github.com, with the file's name and size stated on
+  the line beside it, checks the download against the checksum published with the release, and
+  replaces the program. If sound is running it asks first, because updating closes the program.
+  The line shows the download's progress, then "Checking…", on Windows "Unpacking…", then
+  "Restarting…", and the window closes. Closing is the same as **Exit**: a running take is
+  finished and the session is saved, but loop lanes you have not saved are gone, so press SAVE on
+  them first. A moment later the new version opens with your session, settings and presets as they
+  were. On Windows the folder you extracted is refilled in place; on Linux the new AppImage is put
+  beside the old one and the old one is deleted. The Linux swap is new in 1.8.0 and has had less
+  testing than the Windows one: if the program does not come back, the new AppImage is in the
+  folder the old one was in, ready to run by hand, and a report is welcome.
+- **When it cannot replace itself**, the button reads **Download** instead and the line says why:
+  the program is in a folder it is not allowed to write to, such as `Program Files`, or it was not
+  installed from a release bundle. The checked download goes to your Downloads folder, and you
+  install it by hand as in [Installing and updating](#installing-and-updating).
+- A download that does not match what was published is deleted and the line says so. That is a
+  reason to look at the Releases page, not to press again.
+
+Nothing is checked at startup, on a timer, or when something goes wrong. If you never press the
+button, the program never talks to anything. Versions before 1.8.0 have no button; update those by
+hand once, as in [Installing and updating](#installing-and-updating).
 
 ## What comes back when you reopen the program
 
@@ -867,6 +911,12 @@ your user to the `realtime` or `audio` group and logging out and in.
 **The window is white or blank for a moment on Linux.** It should not be since 1.7.0. If it is,
 Logging on and a report is welcome.
 
+**Check for updates says it could not reach GitHub.** Check that the computer is online and press
+again. Behind a school or office proxy the program uses the system's proxy setting. "GitHub is
+busy" means too many requests came from your address in the last hour, which happens on shared
+connections; try later. "Could not make a secure connection" is a fault in the program's bundled
+runtime rather than your network, and worth a report.
+
 **Something else.** Turn **☰ → Logging** on, use the program until it happens again, then open the
 logs folder and attach `omega.txt` to a report at <https://github.com/Sam-GN/Omega-Plugin/issues>,
 together with the output of `--list-backends` below. Click the status line to copy any error text.
@@ -876,15 +926,16 @@ together with the output of `--list-backends` below. Click the status line to co
 The program can answer a few questions from a command line without opening its window. These are
 for when something is wrong; you never need them to play.
 
-**Windows.** Open the folder you extracted, hold Shift and right-click in an empty space, choose
-"Open PowerShell window here" or "Open in Terminal", and type:
+**Windows.** Open the folder you extracted, click in the address bar at the top of the window, type
+`cmd` in place of the path and press Enter. A black Command Prompt opens in that folder. Type:
 
 ```
-.\OmegaPlugin.exe --list-backends > report.txt
+OmegaPlugin.exe --list-backends > report.txt
 ```
 
 Then open `report.txt`. The `> report.txt` part is needed because the Windows program has no window
-of its own to print into.
+of its own to print into. It has to be the Command Prompt: typed into a PowerShell window, the same
+line leaves `report.txt` empty, because PowerShell does not wait for a program without a window.
 
 **Linux.** From a terminal in the folder holding the AppImage:
 
@@ -898,6 +949,7 @@ It prints directly.
 | --- | --- |
 | `--list-backends` | Every driver that loaded and, for each that did not, why. Each device's rates and buffer sizes. On Linux, whether realtime priority is available and how to get it. The first thing to run when there is too much delay. |
 | `--list-devices` | The devices, per driver. |
+| `--check-update` | What About's Check for updates would say, and whether GitHub could be reached at all. The one command here that uses the network. |
 | `--selftest --chain --stress <input> <output> 60` | Runs the real audio engine between two devices for 60 seconds with every pedal on and the computer under memory pressure, and reports whether it kept up. `<input>` and `<output>` are any part of the devices' names. Add `--backend=asio` or `--buffer=128` to choose. Watch `realtimeRatio`: below 1.0000 means sound was lost. Add `--tone` to send a test tone instead of your input. |
 | `--measure <input> <output>` | With a cable patched from the interface's output back into its input, measures the true round trip. |
 

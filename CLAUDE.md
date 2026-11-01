@@ -49,7 +49,7 @@ be confused with each other:
 | `docs/low-latency-backend.md` | The design behind the `AudioBackend` seam. History rather than a plan — the seam it describes is built. |
 | `docs/virtual-io.md` | Routing Omega into and out of other applications. |
 | `docs/WhatsDone.md` | What has been finished, against the original requirements. |
-| `docs/update-check.md` | **The agreed plan for 1.8.0**, not built: a Check for updates button on About and an Update button that replaces the installed bundle, the only two times the program may touch the network. Its §11 lists what is still open; everything else in it is decided. |
+| `docs/update-check.md` | The plan Check for updates was built from, in 1.8.0. History now: its header lists where the build departed from it. The rules it produced are under "Check for updates" below. |
 | `docs/theme-optional.md`, `docs/profile-optional.md`, `docs/pickup-optional.md`, `docs/instrument-sampler.md` | **Proposals for things nobody has promised.** Written to review later. Do not treat as commitments or as a backlog. The last is the instrument sampler — a captured note played chromatically from a keyboard, and the guitar as its controller. |
 
 Nothing in any of them is a markdown link — every cross-reference is prose in backticks, which is
@@ -108,12 +108,18 @@ omega.sh --measure  [--backend=asio] [--buffer=128] <in> <out> [secs]
   through; without it the chain is empty and it is safe to point at speakers.
 - `--measure` is the only number that is not somebody's claim. Patch a lead from the output back
   into the input and it reports the true cable-to-cable round trip; see `LoopbackProbe`.
+- `--check-update` prints what About's Check for updates would say. **The one network request a
+  headless run can make.** Its exit code is about reaching GitHub, not about the answer: both
+  workflows run it from the AppImage, and a bundle whose runtime cannot complete the TLS
+  handshake (the `jdk.crypto.ec` trap, below) fails there and nowhere else.
 
 There is no linter or formatter configured.
 
 ## Architecture
 
-Three packages under `src/main/kotlin/org/example/`, layered strictly `ui -> dsp <- audio`:
+Four packages under `src/main/kotlin/org/example/`. Three are layered strictly `ui -> dsp <- audio`;
+the fourth, `update/`, is called by `ui` and imports nothing from `dsp` or `audio` beyond the OS
+check — see "Check for updates" below. The three:
 
 - **`audio/`** — the backend seam and the callback body.
   - `AudioBackend.kt` defines the seam: a **duplex stream driven by one clock**, callback-driven,
@@ -529,6 +535,59 @@ back. The rules it depends on:
   anything the JDK decodes, mixes to mono, keeps the first minute and resamples to the stream's rate
   off the audio thread. Nothing sampled ships; a lane is always the user's own audio.
 
+### Check for updates
+
+`org.example.update`, built in 1.8.0 from `docs/update-check.md`. About has a **Check for updates**
+button; pressing it fetches GitHub's release list, and a newer release shows its notes and an
+**Update** button that downloads this platform's bundle, verifies it against the release's
+`SHA256SUMS.txt`, and replaces the installed program. The rules it depends on:
+
+- **Those two presses are the only times the program touches the network.** Not at startup, not on
+  a timer, not when a stream fails, not to fetch a logo. The promise is under the button
+  (`UpdatePanel.PROMISE`), in README.md's *Network* section, in CONTRIBUTING.md, and in
+  `NoNetworkOutsideUpdaterTest`, which fails on any file outside `org/example/update/` that names a
+  JDK network type (`java.net.URI` is allowed — parsing opens nothing). Inside the package only
+  `GitHubSource` opens a socket, and only `Updater`, driven by the panel, calls it. The request
+  carries nothing but the user agent GitHub requires, the program's name and version.
+- **`HttpsURLConnection`, not `java.net.http`**, so the bundled runtime needs no extra module for
+  the client — but it does need **`jdk.crypto.ec`**, in `portableModules`: GitHub's TLS needs
+  elliptic curves, a separate module on Java 21. Without it the check works under `gradlew run`
+  and fails in every bundle with a handshake error that reads like a network fault. `--check-update`
+  in the workflows' smoke test is what pins it.
+- **The releases list, not `releases/latest`**, because every release here is a pre-release and
+  `latest` skips those. The list never contains drafts for an unauthenticated caller, so publishing
+  the draft is the moment users are told. The newest is chosen **by version**, not by position, so a
+  hot-fix published for an older line cannot win. `Versions` is numbers first, then no suffix beats
+  a suffix, then suffixes as text.
+- **Windows replaces in place.** `WindowsInstaller` expands the zip itself (`java.util.zip`), then
+  writes `omega-update.cmd` — plain `cmd`: wait on the PID with `tasklist`, delete `app\*.jar`,
+  `robocopy` the new folder **into** the installed one, start the exe, clean up, delete itself —
+  and starts it minimised. Into the folder rather than beside it because extracting a new
+  `OmegaPlugin-<version>\` moves the exe and breaks every shortcut and taskbar pin. The installed
+  folder is `jpackage.app-path`'s parent; writability is proved by writing, and a folder under
+  `Program Files` fails that probe and gets download-only. The script is held against a golden copy
+  in `src/test/resources/update/`.
+- **Linux swaps the AppImage.** `APPIMAGE` names the running image; the download lands beside it
+  (a rename must stay on one filesystem), is marked executable, and the last step starts it and
+  deletes the old file — safe, the kernel keeps the inode until the process exits. The child's
+  environment loses `APPIMAGE`, `APPDIR`, `OWD` and `ARGV0`, which describe a mount about to
+  vanish. **Unverified on hardware** at 1.8.0; `known-issues.md` §8.
+- **Save before launch.** The installer's last step runs inside `MainWindow.shutdown`, after the
+  session and config are saved and the devices released and before the log closes — so the new
+  process never reads a session the old one is still writing. Apply therefore ends the process;
+  check and download do not and may run while the stream runs. A running stream gets a
+  `ConfirmDialog` before the download starts.
+- **Where it cannot apply** — no `jpackage.app-path` or `APPIMAGE`, or an unwritable folder — the
+  button reads Download, the verified file goes to `Updates.downloadsFolder()` and the line says
+  why. Never a silent no-op.
+- **`-Domega.update.source=<folder>`** answers the requests and the download from canned files
+  (`FileSource`), so the whole path can be driven against a release that does not exist. Nothing
+  shipped sets it. The Windows path was run end to end that way from an extracted bundle.
+- **The release workflow** publishes `SHA256SUMS.txt` beside the bundles and takes the release body
+  from the version's CHANGELOG section — the text between its `## [` heading and the next `---` —
+  so the release page and the dialog show the same human-written notes. A version without a
+  section fails the publish job.
+
 ### Adding to the rhythm section
 
 `dsp/rhythm/` is a transport (`Transport`), a catalogue (`Feels`), a step table (`Pattern`) and five
@@ -728,7 +787,12 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-388 tests in `src/test/kotlin/`, none of which needs an audio device. `AlsaTest` covers the ALSA
+420 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
+`ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
+listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`
+digest, `InstallerTest` against temp folders with the launch injected, and
+`NoNetworkOutsideUpdaterTest`, which is the promise on the About dialog as a test. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
 it runs on Windows too. `CaptureReservoirTest` drives the converting reservoir with a simulated pair
 of devices whose clocks are set 100 ppm apart, for twenty minutes of periods. The useful patterns are impulse

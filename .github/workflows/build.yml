@@ -85,6 +85,9 @@ jobs:
           image=$(ls build/distributions/Omega-Plugin-*-Linux.AppImage)
           APPIMAGE_EXTRACT_AND_RUN=1 "$image" --list-backends | tee report.txt
           grep -q "Collector: generational ZGC. Good." report.txt
+          # The bundled runtime must complete a TLS handshake with GitHub (jdk.crypto.ec); see
+          # release.yml. Reaching GitHub is the pass, whatever it answers.
+          APPIMAGE_EXTRACT_AND_RUN=1 "$image" --check-update
 
       # For whoever wants to try a pull request on Linux without building it.
       - name: Keep the AppImage

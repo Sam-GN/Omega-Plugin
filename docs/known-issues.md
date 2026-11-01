@@ -143,3 +143,37 @@ Three weaknesses, cheapest first, unchanged from the earlier analysis:
    filtering around it.
 
 **Do none of this without a recording from the actual guitar.** That is the whole lesson of §6.1.
+
+---
+
+## 7. Update cannot write into a folder under `Program Files`
+
+**Affects:** 1.8.0-beta, Windows, Check for updates.
+**Status:** **by design for now.** The dialog says so.
+
+`WindowsInstaller` proves the installed folder writable by creating and deleting a file in it before
+offering Update. A folder under `Program Files` fails that probe for a standard user, so the button
+reads **Download**, the verified zip goes to the Downloads folder and the line says to unzip it over
+the installed one by hand. Asking for elevation — a UAC prompt around the helper — is not built and
+probably will not be: the bundle is a zip meant to be extracted somewhere the user can write, and
+README.md says so. A user who extracted it under `Program Files` as an administrator can still
+update by running the program elevated, which is not recommended for other reasons.
+
+Also by design: if the helper's `robocopy` fails part-way (exit code 8 or above), it starts the old
+exe again if it still can and shows the zip in Explorer. A half-copied folder is possible in theory
+— the copy is not atomic — and the remedy is the same unzip-over-it.
+
+---
+
+## 8. The Linux AppImage swap has not run on a real machine
+
+**Affects:** 1.8.0-beta, Linux, the Update button.
+**Status:** **unverified.** Tested against a temp folder with the launch injected, nothing more.
+
+`AppImageInstaller` renames the verified download beside the running image, marks it executable,
+and — after the session is saved — starts it with the AppImage runtime's own variables removed from
+the environment and deletes the old file. Each step is what every AppImage updater does, and
+`InstallerTest` pins the sequence, but the development machine is Windows and the Linux laptop was
+not to hand when 1.8.0 shipped. The first release after 1.8.0 is the first that can be updated to,
+and the first chance to try it. If it fails, the download is still beside the old image and the old
+image is untouched; the line says what happened.

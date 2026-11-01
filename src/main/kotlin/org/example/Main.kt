@@ -55,6 +55,11 @@ fun main(args: Array<String>) {
         // the module is usable at a given buffer size.
         args.contains("--nambench") -> namBench(args.filter { it != "--nambench" })
 
+        // What About's Check for updates would say, without the window. The one deliberate network
+        // request a headless run can make, and the way CI proves a bundle can complete a TLS
+        // handshake: the exit code is about reaching GitHub, not about what it answered.
+        args.contains("--check-update") -> if (!checkUpdate()) exitProcess(1)
+
         args.isNotEmpty() && args[0] == "--selftest" -> selfTest(args.drop(1), measure = false)
 
         // True cable-to-cable round trip. Needs a lead from output back to input.
@@ -185,6 +190,37 @@ private fun listBackends() {
                 else -> "Realtime: ${grant.detail}"
             }
         )
+    }
+}
+
+/**
+ * `--check-update`: asks GitHub for the release list and prints the verdict the dialog would show.
+ *
+ * Returns whether GitHub answered at all. A rate limit, an empty list or a dev build ahead of main
+ * all count as reached — CI runs this from the AppImage and must not fail on what GitHub happens to
+ * say that day, only on a bundle that cannot get a status line back, which is the `jdk.crypto.ec`
+ * trap `build.gradle.kts` describes.
+ */
+private fun checkUpdate(): Boolean {
+    val running = org.example.update.Updates.runningVersionText()
+    val platform = org.example.update.Platform.current()
+    println("Omega-Plugin ${running ?: "(version unknown — not run from the jar)"} on ${platform.displayName}")
+    return try {
+        val json = org.example.update.Updates.source().fetch(org.example.update.GitHubSource.RELEASES_URL)
+        val releases = org.example.update.ReleasePicker.parse(json)
+        val verdict = org.example.update.ReleasePicker.pick(releases, org.example.update.Updates.runningVersion(), platform)
+        println(org.example.update.Updates.headline(verdict, platform))
+        if (verdict is org.example.update.Verdict.Available) {
+            verdict.asset?.let { println("Asset: ${it.name} (${org.example.update.Updates.describeSize(it.size)}) ${it.url}") }
+            println("Install: ${org.example.update.Updates.installer().cannotApply() ?: "this copy can replace itself."}")
+        }
+        println("Reached GitHub: yes")
+        true
+    } catch (e: org.example.update.UpdateException) {
+        println(e.message)
+        e.cause?.let { println("  (${it.javaClass.simpleName}: ${it.message})") }
+        println("Reached GitHub: ${if (e.reachedServer) "yes" else "no"}")
+        e.reachedServer
     }
 }
 
