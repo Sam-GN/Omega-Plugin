@@ -131,8 +131,20 @@ class Config(private val file: Path) {
         }
 
     /**
-     * Where the popped-out loop window was last, as `x,y,width,height`, or null when it has never
-     * been popped out. Remembered so it comes back on the same screen it was put on.
+     * Where the main window was when the application last closed, as `x,y,width,height` with
+     * `,max` on the end if it was maximised — `ui/WindowPlacement` reads and writes it — or null
+     * on a first run. Remembered so the window comes back on the monitor it was on, at its size.
+     */
+    var mainWindow: String?
+        get() = values[MAIN_WINDOW] as? String
+        set(value) {
+            if (value == null) values.remove(MAIN_WINDOW) else values[MAIN_WINDOW] = value
+            save()
+        }
+
+    /**
+     * Where the popped-out loop window was last, in the same form, or null when it has never been
+     * popped out. Remembered so it comes back on the same screen it was put on.
      */
     var loopWindowBounds: String?
         get() = values[LOOP_WINDOW] as? String
@@ -241,6 +253,7 @@ class Config(private val file: Path) {
         private const val LOGGING = "loggingEnabled"
         private const val HIDE_DISABLED = "hideDisabledModules"
         private const val LOOP_KEYS = "loopKeys"
+        private const val MAIN_WINDOW = "mainWindow"
         private const val LOOP_WINDOW = "loopWindowBounds"
         private const val LOOP_POPPED = "loopPoppedOut"
 

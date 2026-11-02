@@ -178,6 +178,9 @@ class MainWindow : JFrame("Omega-Plugin") {
 
     private val titleBar = TitleBar(this, "Omega-Plugin") { shutdown() }
 
+    /** Where the window is, kept for the next run; see `WindowPlacement`. */
+    private val placement = WindowPlacement.Tracker(this)
+
     // ------------------------------------------------------------- presets
 
     private val store = PresetStore.default()
@@ -849,7 +852,11 @@ class MainWindow : JFrame("Omega-Plugin") {
         // Small enough that the board can be driven down to a single column. Both the device bar and
         // the pedal board wrap, so there is no width at which the window merely clips.
         minimumSize = Dimension(380, 320)
-        setLocationRelativeTo(null)
+        // Back where it was closed — same monitor, same size, maximised if it was — when that place
+        // is still on a screen; otherwise the middle of the primary one, as on a first run. Before
+        // the window is shown, so it opens in its final shape, and `main` has already put the splash
+        // at the same centre.
+        if (!WindowPlacement.apply(this, WindowPlacement.parse(config.mainWindow), placement)) setLocationRelativeTo(null)
 
         // The sound comes back *after* the window is on screen, and that is deliberate: restoring a
         // NAM capture runs its mandatory warm-up, which is tens to hundreds of milliseconds of doing
@@ -1829,9 +1836,10 @@ class MainWindow : JFrame("Omega-Plugin") {
         // Before anything is torn down, while the combos still hold the selection they are being
         // asked about. A pending coalesced save is superseded rather than raced.
         saveSession()
-        // Where the loop board was, so it comes back there.
+        // Where this window and the loop board were, so they come back there.
+        config.mainWindow = placement.current().text()
         val popped = loopWindow
-        if (popped != null) config.loopWindowBounds = popped.boundsText()
+        if (popped != null) config.loopWindowBounds = popped.placementText()
         config.loopPoppedOut = popped != null
         popped?.dispose()
         // Closing the window mid-take must still finish the file, or the header never gets its
@@ -1938,7 +1946,7 @@ class MainWindow : JFrame("Omega-Plugin") {
             looper.enabled = false
             val window = loopWindow
             if (window != null) {
-                config.loopWindowBounds = window.boundsText()
+                config.loopWindowBounds = window.placementText()
                 window.dispose()
                 loopWindow = null
                 loopBoard.docked = true
@@ -1964,7 +1972,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         stack.detachAbove()
         loopBoard.alpha = 1f
         loopBoard.docked = false
-        val window = LoopWindow(loopBoard, LoopWindow.parseBounds(config.loopWindowBounds)) { popInLoop() }
+        val window = LoopWindow(loopBoard, WindowPlacement.parse(config.loopWindowBounds)) { popInLoop() }
         loopWindow = window
         window.isVisible = true
     }
@@ -1972,7 +1980,7 @@ class MainWindow : JFrame("Omega-Plugin") {
     /** Brings the loop board back from its window into the stack. The audio never notices. */
     private fun popInLoop() {
         val window = loopWindow ?: return
-        config.loopWindowBounds = window.boundsText()
+        config.loopWindowBounds = window.placementText()
         loopWindow = null
         window.dispose()
         loopBoard.docked = true

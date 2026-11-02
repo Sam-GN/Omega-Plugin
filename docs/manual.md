@@ -810,7 +810,9 @@ The program puts itself back the way you left it:
   program picks the first one on that driver and says so in the status line.
 - The metronome's settings.
 - Whether split mode and the loop box were on, and whether the eye was hiding pedals.
-- Where the loop box's pop-out window was, and the keys bound to its lanes.
+- Where the window itself was: the same monitor, size and position, maximised if it was. If that
+  monitor has gone, the window opens in the middle of the main screen instead.
+- Where the loop box's pop-out window was, in the same way, and the keys bound to its lanes.
 
 It does **not** start the stream for you. Press Start. And it does not keep the loop box's audio.
 

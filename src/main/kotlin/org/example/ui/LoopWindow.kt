@@ -22,8 +22,6 @@ package org.example.ui
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.Frame
-import java.awt.Rectangle
-import java.awt.Toolkit
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import javax.swing.BorderFactory
@@ -47,9 +45,11 @@ import javax.swing.WindowConstants
  */
 class LoopWindow(
     private val board: LoopBoard,
-    bounds: Rectangle?,
+    placement: WindowPlacement?,
     private val onPopIn: () -> Unit,
 ) : JFrame("Omega-Plugin — Loop") {
+
+    private val tracker = WindowPlacement.Tracker(this)
 
     init {
         defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
@@ -88,9 +88,9 @@ class LoopWindow(
 
         pack()
         minimumSize = Dimension(560, 200)
-        if (bounds != null && onScreen(bounds)) {
-            setBounds(bounds)
-            // The lanes may have changed since those bounds were saved.
+        // Back where it was, maximised if it was, when that place is still on a monitor.
+        if (WindowPlacement.apply(this, placement, tracker)) {
+            // The lanes may have changed since that place was saved.
             fitLanes()
         } else {
             setLocationRelativeTo(null)
@@ -107,39 +107,13 @@ class LoopWindow(
         if ((extendedState and Frame.MAXIMIZED_VERT) != 0) return
         val needed = preferredSize.height
         if (height >= needed) return
-        val area = workArea()
+        val area = WindowPlacement.workArea(graphicsConfiguration)
         val bottom = area.y + area.height
         val top = if (y + needed > bottom) maxOf(area.y, bottom - needed) else y
         setBounds(x, top, width, needed)
         validate()
     }
 
-    private fun workArea(): Rectangle {
-        val config = graphicsConfiguration
-        val bounds = config.bounds
-        val insets = Toolkit.getDefaultToolkit().getScreenInsets(config)
-        return Rectangle(
-            bounds.x + insets.left,
-            bounds.y + insets.top,
-            bounds.width - insets.left - insets.right,
-            bounds.height - insets.top - insets.bottom,
-        )
-    }
-
-    /** The window's place, as the settings store it. */
-    fun boundsText(): String = "${x},${y},${width},${height}"
-
-    private fun onScreen(r: Rectangle): Boolean {
-        // A monitor that was there last time may not be now; a window placed on it would be lost.
-        val screens = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
-        return screens.any { it.defaultConfiguration.bounds.intersects(r) }
-    }
-
-    companion object {
-        fun parseBounds(text: String?): Rectangle? {
-            val parts = text?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: return null
-            if (parts.size != 4 || parts[2] < 200 || parts[3] < 100) return null
-            return Rectangle(parts[0], parts[1], parts[2], parts[3])
-        }
-    }
+    /** The window's place, as the settings store it: normal bounds, and whether it is maximised. */
+    fun placementText(): String = tracker.current().text()
 }

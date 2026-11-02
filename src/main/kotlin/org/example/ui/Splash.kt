@@ -24,6 +24,7 @@ import java.awt.AlphaComposite
 import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
+import java.awt.Point
 import java.awt.RenderingHints
 import javax.swing.JComponent
 import javax.swing.JWindow
@@ -36,11 +37,12 @@ import javax.swing.Timer
  * application fades in behind it.
  *
  * Two surfaces, one painter. [show] puts up a small frameless window on the background colour
- * with the logo centred on the screen; the main window, centred on the same screen, then appears
- * under its veil with the same logo at the same point, so the eye sees one logo and a window
- * forming around it. [paint] is what both draw, which is what keeps them in register. [dismiss]
- * takes the small window down once the main window has its first frame — not before, or there
- * is a flash of desktop between the two.
+ * with the logo centred where the main window's centre will be — the middle of the screen on a
+ * first run, the middle of the remembered place after that; the main window then appears under
+ * its veil with the same logo at the same point, so the eye sees one logo and a window forming
+ * around it. [paint] is what both draw, which is what keeps them in register. [dismiss] takes the
+ * small window down once the main window has its first frame — not before, or there is a flash
+ * of desktop between the two.
  *
  * Only the GUI path shows it. `--selftest` and friends never reach Swing, and a splash flashing
  * over a terminal would be the wrong kind of memorable.
@@ -66,7 +68,8 @@ object Splash {
     private var painted = false
     private var afterPaint: (() -> Unit)? = null
 
-    fun show() {
+    /** Shows the logo centred on [centre], or on the primary screen when there is no remembered place. */
+    fun show(centre: Point? = null) {
         if (window != null) return
         val w = JWindow()
         w.focusableWindowState = false
@@ -84,7 +87,7 @@ object Splash {
             }
         }
         w.pack()
-        w.setLocationRelativeTo(null)
+        if (centre != null) w.setLocation(centre.x - SIDE / 2, centre.y - SIDE / 2) else w.setLocationRelativeTo(null)
         w.isVisible = true
         window = w
     }

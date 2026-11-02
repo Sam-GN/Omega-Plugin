@@ -87,10 +87,15 @@ fun main(args: Array<String>) {
             SwingUtilities.invokeLater {
                 Theme.install()
                 org.example.ui.AppIcon.applyToTaskbar()
-                // The logo, dead centre, for the half second the window takes to build; the window's
-                // veil then carries it and fades it out. Taken down if the window never arrives, or
-                // a failed start would leave a logo on the desktop with nothing behind it.
-                org.example.ui.Splash.show()
+                // The logo, dead centre of where the window will be, for the half second the window
+                // takes to build; the window's veil then carries it and fades it out. Taken down if
+                // the window never arrives, or a failed start would leave a logo on the desktop with
+                // nothing behind it. The window is built where it was last closed, if that place is
+                // still on a monitor, so the logo has to go there too or the two are out of register.
+                val remembered = org.example.ui.WindowPlacement.resolve(
+                    org.example.ui.WindowPlacement.parse(org.example.util.Config.default().mainWindow),
+                )
+                org.example.ui.Splash.show(remembered?.centre)
                 val build = {
                     try {
                         MainWindow().isVisible = true

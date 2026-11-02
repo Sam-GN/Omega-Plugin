@@ -173,12 +173,17 @@ check — see "Check for updates" below. The three:
   while the board has no width; `setLoop(atOnce = true)`), because there is nothing on screen for
   a fade to start from, and a fade that starts from nothing eases every pedal out of a point. The
   sound itself is restored after the first paint, for the NAM warm-up. The entrance is the logo:
-  `Splash` holds it dead centre of the screen in a small frameless window from the moment `main`
-  reaches Swing, the window's glass-pane veil paints the same logo at the same point and lifts
+  `Splash` holds it in a small frameless window from the moment `main` reaches Swing, dead centre
+  of where the window will be, the window's glass-pane veil paints the same logo at the same point and lifts
   over `VEIL_MILLIS`, logo out and window in, and the splash is dismissed on the veil's first tick,
   not on `windowOpened`, which arrives while the event thread is still busy behind it. Both
   surfaces draw through `Splash.paint`, which is what keeps them in register. Only the GUI path
-  shows it.
+  shows it. **Where the window will be is remembered** (1.9.0): `WindowPlacement` keeps the normal
+  bounds and the maximised flag in `Config.mainWindow`, `MainWindow` applies them before it is shown
+  and `main` centres the splash on the same point, so the two stay in register on a second monitor.
+  The place is used only if a hand's width of the title bar is inside some monitor's work area —
+  `WindowPlacement.resolve`, tested against fake monitors — and otherwise the window is centred as
+  on a first run. The pop-out goes through the same class.
 
   **Linux takes a different route to the same picture, and Windows must not be moved onto it.**
   X11 maps a window and asks for its paint later, as an event of its own, so on Linux: the splash
@@ -528,7 +533,8 @@ back. The rules it depends on:
 - **Lanes outlive everything but the process**: the panel being hidden, the pop-out, the stream
   stopping, the rate changing. Loop off stops playback with a fade and keeps the audio. The session
   stores only whether the board was on; `Config` keeps the key bindings, the popped-out window's
-  bounds and whether it was popped out at close. The pop-out's size is the user's: `LoopWindow.fitLanes`
+  placement — bounds and maximised, through `WindowPlacement` since 1.9.0 — and whether it was
+  popped out at close. The pop-out's size is the user's: `LoopWindow.fitLanes`
   grows it only when a lane would not fit, never shrinks it, and leaves a maximised window alone
   (1.8.1; before that every lane change reset the height).
 - **The warm-up runs the looper's paths on a throwaway instance** with tiny lanes, so the real lanes
@@ -789,7 +795,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-420 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+428 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

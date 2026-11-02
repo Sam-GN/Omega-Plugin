@@ -9,6 +9,20 @@ unverified, it says so.
 
 ---
 
+## [1.9.0-beta] — 2026-11-01
+
+### Added — the window comes back where you left it
+
+The main window reopens on the monitor it was closed on, at the same size and position, and
+maximised if it was. So does the loop box's pop-out, which until now remembered its place but not
+that it was maximised. If that place no longer exists — the monitor has been unplugged, or the
+window would come back with its title bar off every screen — the window opens in the middle of the
+primary screen, as it always did. A saved size larger than the monitor it lands on is cut down to
+fit. The logo at startup appears where the window's centre will be, so the window still forms
+around it. Nothing to set: it is remembered in `config.json` as `mainWindow`.
+
+---
+
 ## [1.8.1-beta] — 2026-11-01
 
 ### Fixed — the popped-out loop window keeps the size you give it

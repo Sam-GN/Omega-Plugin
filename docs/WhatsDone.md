@@ -251,6 +251,10 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **The window comes back where it was, 1.9.0-beta.** Monitor, size, position and maximised, for
+  the main window and the loop box's pop-out, when that place is still on a screen; the splash
+  goes to the same point. `ui/WindowPlacement.kt`, with the rules tested against fake monitors.
+
 - **Check for updates, 1.8.0-beta.** About has the button; a newer release shows its notes and an
   Update button that downloads this platform's bundle, verifies it against the release's
   `SHA256SUMS.txt`, saves the session and replaces the program — in place on Windows through a
