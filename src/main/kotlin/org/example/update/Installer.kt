@@ -309,6 +309,17 @@ class WindowsInstaller(
         /**
          * The helper, as text. A function of its inputs so a test can hold it against a golden copy.
          *
+         * The file is UTF-8 and its second line is `chcp 65001`, because `cmd` reads a batch file in
+         * the console's OEM code page, not the system's: written without it, every path here was
+         * garbled for a user called José or Пётр, `robocopy` failed with code 16 and, the program
+         * having already exited, nothing started it again. Measured on Windows 10 in 1.9.2.
+         *
+         * Every external command is named by its full path under `System32`. Git for Windows
+         * offers to put its Unix tools on the PATH, and then `find` is GNU find, which takes the
+         * PID for a directory and fails: the wait loop ended at once, `robocopy` ran against a
+         * program that was still open, and the copy failed. Measured on Windows 10 in 1.9.2, from a
+         * shell with Git's tools first on the PATH.
+         *
          * Waits with `tasklist` and `ping` rather than PowerShell's `Wait-Process`, so the script
          * runs on any Windows with nothing but `cmd`. `app\*.jar` is deleted first because the jar
          * is versioned by name and the launcher's `.cfg` names the new one; a stale jar would be
@@ -320,6 +331,7 @@ class WindowsInstaller(
             """
             @echo off
             rem Omega-Plugin update helper. Written by the program; removes itself when done.
+            chcp 65001 >nul
             set "PID=$pid"
             set "SRC=$source"
             set "DST=$target"
@@ -327,15 +339,15 @@ class WindowsInstaller(
             set "STAGE=$expanded"
             title Omega-Plugin update
             :wait
-            tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul
+            "%SystemRoot%\System32\tasklist.exe" /FI "PID eq %PID%" 2>nul | "%SystemRoot%\System32\find.exe" "%PID%" >nul
             if not errorlevel 1 (
-                ping -n 2 127.0.0.1 >nul
+                "%SystemRoot%\System32\ping.exe" -n 2 127.0.0.1 >nul
                 goto wait
             )
             del /q "%DST%\app\*.jar" 2>nul
-            robocopy "%SRC%" "%DST%" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul
+            "%SystemRoot%\System32\robocopy.exe" "%SRC%" "%DST%" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul
             if errorlevel 8 (
-                start "" explorer.exe /select,"%ZIP%"
+                start "" "%SystemRoot%\explorer.exe" /select,"%ZIP%"
                 start "" "%DST%\$exe"
                 goto end
             )

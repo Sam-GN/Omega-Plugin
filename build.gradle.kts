@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "org.example"
-version = "1.9.1-beta"
+version = "1.9.2-beta"
 
 repositories {
     mavenCentral()

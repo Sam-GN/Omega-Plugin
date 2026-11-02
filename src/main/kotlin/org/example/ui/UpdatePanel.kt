@@ -176,7 +176,8 @@ class UpdatePanel(private val host: Host) : JPanel() {
         available = verdict
         val body = verdict.release.body.trim().replace("\r\n", "\n")
         if (body.isNotEmpty()) {
-            val lines = body.lines()
+            // The body is the CHANGELOG section, which is markdown: a heading line shows as its words.
+            val lines = body.lines().map { line -> if (line.startsWith("#")) line.trimStart('#', ' ') else line }
             notes.text = lines.take(NOTE_LINES).joinToString("\n") + if (lines.size > NOTE_LINES) "\n…" else ""
             notes.caretPosition = 0
             // Sized here rather than left to the text area: a wrapping `JTextArea` still reports

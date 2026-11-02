@@ -9,6 +9,37 @@ unverified, it says so.
 
 ---
 
+## [1.9.2-beta] — 2026-11-01
+
+### Fixed — updating on Windows, checked on Windows for the first time since 1.8.0
+
+Two faults in the helper that copies the new version into place, both found by running the update
+path again on this machine against a stand-in release:
+
+- **A user whose profile path has an accent or any non-ASCII letter could not update.** The helper
+  script is UTF-8 but `cmd` reads a batch file in the console's OEM code page, so for a user called
+  José every path in it was garbled: the copy failed and, the program having already closed,
+  nothing started it again. The script now begins with `chcp 65001`. Measured: the same copy into
+  a folder named `José only` failed before the line and succeeded after it.
+- **With Git for Windows' Unix tools on the PATH the helper did not wait.** Its wait loop pipes
+  `tasklist` through `find`, and there `find` is GNU find, which fails at once, so the copy began
+  while the program was still open. Every command in the script is now named by its full path under
+  `System32`. Measured: the loop ended after 230 ms before the change and after the process had
+  exited afterwards, with the installed jar held open.
+
+Both were run end to end through the real About dialog, in a folder with a non-ASCII name, with the
+installed jar held open as the running program holds it: the helper waited for the process, refilled
+the folder, left nothing in the temp folder and started the program again. The bundled exe's
+`--check-update` reached GitHub from the same folder.
+
+Smaller: the release notes in the dialog no longer show markdown heading marks; the installer test
+that creates a symlink is skipped where the account cannot create one, instead of failing the
+Windows build; and known-issues §9 records that the jpackage launcher itself will not start from a
+folder whose name has characters outside the system code page, which is a limit of the launcher and
+affects installing, not only updating.
+
+---
+
 ## [1.9.1-beta] — 2026-11-01
 
 ### Fixed — updating on Linux, the first time it was run on a real machine

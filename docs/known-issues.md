@@ -181,3 +181,21 @@ fails while opening its window has already replaced the old one. Everything the 
 one Manjaro laptop under X11 (Xvfb) with a dummy JACK server, in folders with spaces, through a
 symlink, renamed, without FUSE and under AppImageLauncher, against a locally built stand-in for the
 next release. It has not yet updated into a real published release.
+
+---
+
+## 9. The Windows launcher will not start from a folder with characters outside the system code page
+
+**Affects:** every Windows version so far, installing and updating.
+**Status:** **not fixed; a limit of the jpackage launcher.** Found 2026-11-01 while checking the updater.
+
+`OmegaPlugin.exe` is the launcher jpackage generates, and run from a folder whose path holds a
+character the system's ANSI code page cannot represent — Cyrillic under a Western Windows, say,
+which is what a user named Пётр on an English installation has for a profile folder — it stops with
+`Error: could not find java.dll` before any code of ours runs. A Latin-1 character such as the é in
+José is fine. Measured by running the 1.9.1 bundle's `--version` from three copies of the same
+folder: `ascii` and `José only` answered, `José Пётр` did not.
+
+It follows that Update cannot bring the program back in such a folder either, but it never ran there
+in the first place. The way round is to extract the zip somewhere whose path is plain, such as
+`C:\Omega-Plugin`. Fixing it means a different launcher, which is not planned.

@@ -141,7 +141,12 @@ class InstallerTest {
             val apps = Files.createDirectory(folder.resolve("apps"))
             val bin = Files.createDirectory(folder.resolve("bin"))
             val (real, staged) = images(apps)
-            val link = Files.createSymbolicLink(bin.resolve("omega"), real)
+            // A standard Windows account can create a symlink only in Developer Mode. A test of the
+            // Linux swap is not a reason for the Windows build to fail, so there it is skipped.
+            val link = runCatching { Files.createSymbolicLink(bin.resolve("omega"), real) }.getOrElse { e ->
+                org.junit.jupiter.api.Assumptions.assumeTrue(false, "this account cannot create a symlink: ${e.message}")
+                error("unreachable")
+            }
             val installer = AppImageInstaller(link, { null }) { }
             assertEquals(apps.toRealPath(), installer.downloadFolder(), "the file's folder, for a same-disk rename")
             installer.stage(staged) { }()
@@ -297,9 +302,12 @@ class InstallerTest {
             .replace("\r\n", "\n").replace("\n", "\r\n")
         assertEquals(golden, script)
         // The properties a reader would check by eye, stated so a golden-copy update cannot lose them.
-        assertContains(script, "tasklist /FI \"PID eq %PID%\"")
+        assertContains(script, "chcp 65001 >nul", message = "cmd reads the file in the OEM code page; this makes it UTF-8")
+        assertContains(script, "\"%SystemRoot%\\System32\\tasklist.exe\" /FI \"PID eq %PID%\"")
+        assertContains(script, "| \"%SystemRoot%\\System32\\find.exe\" \"%PID%\"", message = "a bare find can be GNU find")
         assertContains(script, "del /q \"%DST%\\app\\*.jar\"")
-        assertContains(script, "robocopy \"%SRC%\" \"%DST%\" /E")
+        assertContains(script, "\"%SystemRoot%\\System32\\robocopy.exe\" \"%SRC%\" \"%DST%\" /E")
+        assertFalse(Regex("""^\s*(tasklist|find|ping|robocopy|explorer)(\.exe)?\s""", RegexOption.MULTILINE).containsMatchIn(script), "every external command by full path")
         assertContains(script, "if errorlevel 8")
         assertContains(script, "start \"\" \"%DST%\\OmegaPlugin.exe\"")
         assertContains(script, "(goto) 2>nul & del \"%~f0\"")

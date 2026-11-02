@@ -576,7 +576,11 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   `OmegaPlugin-<version>\` moves the exe and breaks every shortcut and taskbar pin. The installed
   folder is `jpackage.app-path`'s parent; writability is proved by writing, and a folder under
   `Program Files` fails that probe and gets download-only. The script is held against a golden copy
-  in `src/test/resources/update/`.
+  in `src/test/resources/update/`. Two rules it learned on Windows in 1.9.2: it begins with
+  `chcp 65001`, because `cmd` reads a batch file in the OEM code page and a UTF-8 path with an é in
+  it was garbled into a failed copy and no restart; and every external command in it is named by
+  its `System32` path, because with Git for Windows' Unix tools on the PATH a bare `find` is GNU
+  find, the wait loop ended at once and the copy ran against the open program.
 - **Linux replaces the AppImage at its own path, after running the new one.** `APPIMAGE` names the
   running image, resolved through any symlink. The download lands beside it under a hidden staged
   name (`Installer.stagedName`), so nothing watching the folder takes it for an install, and `stage`
