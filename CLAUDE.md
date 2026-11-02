@@ -34,7 +34,8 @@ working tree, hand over the commands.
 
 ### The other documents
 
-`CHANGELOG.md`, `README.md`, `CONTRIBUTING.md` and this file are at the root. `CONTRIBUTING.md` is
+`CHANGELOG.md`, `README.md`, `CONTRIBUTING.md`, `manual.md` and this file are at the root — the
+manual since 2.0.9, so a reader finds it beside the README rather than a folder down. `CONTRIBUTING.md` is
 the short version of this file written for a stranger — the rules that get a patch turned down, and
 nothing about why the code is shaped the way it is. When a rule here changes and it is one of those,
 change it there too; when it is not, leave that file alone. Everything else is in `docs/`, and the
@@ -43,7 +44,7 @@ be confused with each other:
 
 | File | What it is |
 | --- | --- |
-| `docs/manual.md` | **The user manual**, written for a player who has never used the program: every control, every pedal, every menu item, and what to do when it goes wrong. The one document here meant for users rather than maintainers — README.md and the About dialog (`Licences.MANUAL_URL`) link to it. **When a control changes, change it here too.** Its table of contents links to its own headings, the one place in `docs/` a markdown link is allowed, because an anchor survives a move. |
+| `manual.md` (at the root) | **The user manual**, written for a player who has never used the program: every control, every pedal, every menu item, and what to do when it goes wrong. The one document here meant for users rather than maintainers — README.md and the About dialog (`Licences.MANUAL_URL`) link to it. **When a control changes, change it here too.** Its table of contents links to its own headings, the one place in these documents a markdown link is allowed, because an anchor survives a move. `docs/manual.md` is a one-line note saying where it went, kept because every About dialog from 1.7.2 to 2.0.8 opens that path. |
 | `docs/known-issues.md` | **Defects in code that already ships.** Nothing speculative. Each entry is a shortcoming in something a user can switch on today. |
 | `docs/linux-compat.md` | **The Linux work plan**, numbered `F1`–`F11` against workstreams `W1`–`W7`, mostly built in 1.1.0. Its §0 is the current status and overrides the plan text below it. AppImage is the chosen format. |
 | `docs/low-latency-backend.md` | The design behind the `AudioBackend` seam. History rather than a plan — the seam it describes is built. |

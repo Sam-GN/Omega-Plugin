@@ -9,6 +9,16 @@ unverified, it says so.
 
 ---
 
+## [2.0.9-beta] — 2026-11-02
+
+### Changed — the manual sits beside the README
+
+`manual.md` is at the root of the repository now, where a visitor sees it, and the README and
+About's **User manual** button point there. The old place, `docs/manual.md`, holds a note saying
+where it went, because every copy from 1.7.2 to 2.0.8 opens that path from About.
+
+---
+
 ## [2.0.8-beta] — 2026-11-02
 
 ### Fixed — the Linux build failed on one of 2.0.7's tests

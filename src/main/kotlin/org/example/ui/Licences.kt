@@ -58,12 +58,12 @@ object Licences {
     const val SOURCE_URL = "https://github.com/Sam-GN/Omega-Plugin"
 
     /**
-     * The user manual, `docs/manual.md` on the default branch of [SOURCE_URL].
+     * The user manual, `manual.md` on the default branch of [SOURCE_URL].
      *
      * Derived from the source URL rather than written out, so the two cannot name different
      * repositories. About shows it as a link; it is the only other address the program carries.
      */
-    const val MANUAL_URL = "$SOURCE_URL/blob/main/docs/manual.md"
+    const val MANUAL_URL = "$SOURCE_URL/blob/main/manual.md"
 
     const val COPYRIGHT = "Copyright © 2026 Sam Ganji <sam.ganji.n@gmail.com>"
 
