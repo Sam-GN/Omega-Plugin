@@ -98,6 +98,15 @@ object Updates {
         return if (Files.isDirectory(downloads)) downloads else home
     }
 
+    /**
+     * What to do with a download this copy could not install, so that the user ends up with one copy
+     * where the old one was rather than two, each updating only itself.
+     */
+    fun howToInstall(platform: Platform): String = when (platform) {
+        Platform.LINUX -> "To update, move it over your old copy, so your shortcuts open the new version."
+        Platform.WINDOWS -> "To update, unzip it over your OmegaPlugin folder, so your shortcuts open the new version."
+    }
+
     /** `61 MB`, `912 kB`: what the dialog says a download weighs. */
     fun describeSize(bytes: Long): String = when {
         bytes >= 1_000_000 -> "${(bytes + 500_000) / 1_000_000} MB"

@@ -9,6 +9,30 @@ unverified, it says so.
 
 ---
 
+## [2.0.6-beta] — 2026-11-02
+
+### Fixed — nothing you keep is written over or lost without asking
+
+- **Saving a loop lane could replace a file without asking.** Typing `riff` in the save dialog saved
+  `riff.wav`, but the dialog had only checked for a file called `riff`, so an existing `riff.wav` was
+  written over in silence. It now asks first.
+- **Quitting or updating lost unsaved loop lanes without a word.** Lanes live only in memory. Exit,
+  the window's ✕ and Update now say how many lanes are not saved and ask first. A lane counts as
+  saved once SAVE has written it, and its label then shows the file's name.
+- **A preset's name could steer a recording out of its folder.** Recordings are named after the
+  preset, and a name with `/` or `..` in it, typed or in a preset somebody sent you, is now made
+  safe first, as preset files already were.
+- **Two recordings started in the same second shared one file**, so the first was lost. A recording
+  never opens a file that is already there; it takes ` (2)`, ` (3)`.
+- **A Download could replace a file of the same name** in your Downloads folder. It now goes beside
+  it as ` (2)`, and the line says how to install it: move it over your old copy, or on Windows unzip
+  it over your OmegaPlugin folder, so you keep one copy and your shortcuts open the new version.
+- **Windows: updating emptied any folder in the temp folder called `omega-update`.** Each update now
+  unpacks into a new folder of its own, and an abandoned one is removed only with the program's own
+  mark inside it.
+
+---
+
 ## [2.0.5-beta] — 2026-11-01
 
 ### Fixed — Update could replace another program's file

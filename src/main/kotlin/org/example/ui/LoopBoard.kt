@@ -599,6 +599,7 @@ class LoopBoard(
             val rate = looper.sampleRate.roundToInt()
             try {
                 LaneFiles.save(file, lane.buffer, lane.length, rate)
+                looper.markSaved(lane, file.name)
                 host.status("Saved lane ${index + 1} to \"${file.name}\".", Theme.GOOD)
             } catch (e: LaneFileException) {
                 host.status("\"${file.name}\" ${e.message}", Theme.BAD)

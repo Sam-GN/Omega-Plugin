@@ -168,4 +168,33 @@ class LeftoversTest {
         assertEquals(1, Leftovers.sweepExtracted(temp, null, now) { false })
         assertTrue(Files.exists(outside))
     }
+
+    @Test
+    fun `an abandoned Windows stage and its helper are removed, and nothing that only shares the name`() {
+        val stage = Files.createDirectories(temp.resolve("${WindowsInstaller.STAGE_PREFIX}123"))
+        Files.writeString(stage.resolve(WindowsInstaller.STAGE_MARKER), "x")
+        Files.createDirectories(stage.resolve("OmegaPlugin/app"))
+        Files.setLastModifiedTime(stage, FileTime.fromMillis(old))
+        val helper = file("${WindowsInstaller.STAGE_PREFIX}123.cmd")
+        Files.writeString(helper, WindowsInstaller.HELPER_HEADER + " Written by the program")
+        Files.setLastModifiedTime(helper, FileTime.fromMillis(old))
+        val lookalike = Files.createDirectories(temp.resolve("${WindowsInstaller.STAGE_PREFIX}notes"))
+        Files.writeString(lookalike.resolve("mine.txt"), "x")
+        Files.setLastModifiedTime(lookalike, FileTime.fromMillis(old))
+        val script = file("${WindowsInstaller.STAGE_PREFIX}backup.cmd")
+        val oldName = Files.createDirectories(temp.resolve("omega-update"))
+        Files.setLastModifiedTime(oldName, FileTime.fromMillis(old))
+        assertEquals(2, Leftovers.sweepStages(temp, now))
+        assertFalse(Files.exists(stage) || Files.exists(helper))
+        assertTrue(Files.exists(lookalike.resolve("mine.txt")) && Files.exists(script) && Files.exists(oldName))
+    }
+
+    @Test
+    fun `a stage still being unpacked is left alone`() {
+        val stage = Files.createDirectories(temp.resolve("${WindowsInstaller.STAGE_PREFIX}9"))
+        Files.writeString(stage.resolve(WindowsInstaller.STAGE_MARKER), "x")
+        Files.setLastModifiedTime(stage, FileTime.fromMillis(now - 1000))
+        assertEquals(0, Leftovers.sweepStages(temp, now))
+        assertTrue(Files.exists(stage))
+    }
 }

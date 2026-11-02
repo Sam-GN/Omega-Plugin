@@ -111,10 +111,7 @@ class PresetStore(val folder: Path) {
      * become "A_B" — hence the numbered fallback.
      */
     private fun freeFile(name: String): Path {
-        val base = name.map { if (it.isLetterOrDigit() || it in " -_()&+.,'") it else '_' }
-            .joinToString("")
-            .trim()
-            .ifEmpty { "preset" }
+        val base = org.example.util.FileNames.part(name).ifEmpty { "preset" }
         var candidate = folder.resolve("$base.json")
         var suffix = 2
         while (Files.exists(candidate)) {

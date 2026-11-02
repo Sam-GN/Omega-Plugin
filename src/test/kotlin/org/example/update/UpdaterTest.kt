@@ -139,4 +139,27 @@ class UpdaterTest {
             Files.delete(folder)
         }
     }
+
+    @Test
+    fun `a download that cannot be applied goes beside a file of the same name, never over it`() {
+        val folder = Files.createTempDirectory("omega-updater")
+        val home = Files.createTempDirectory("omega-home")
+        val downloads = Files.createDirectories(home.resolve("Downloads"))
+        val kept = downloads.resolve(assetName).also { Files.writeString(it, "the copy they kept") }
+        val realHome = System.getProperty("user.home")
+        System.setProperty("user.home", home.toString())
+        try {
+            val listener = run(Source(), StubInstaller(folder, "not writable"), available(withChecksums = true))
+            val saved = assertNotNull(listener.saved)
+            assertEquals(downloads.resolve("Omega-Plugin-1.8.1-beta-Linux (2).AppImage"), saved)
+            assertEquals("the copy they kept", Files.readString(kept))
+            Files.delete(saved)
+            Files.delete(kept)
+        } finally {
+            System.setProperty("user.home", realHome)
+            Files.delete(downloads)
+            Files.delete(home)
+            Files.delete(folder)
+        }
+    }
 }

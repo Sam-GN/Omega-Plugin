@@ -197,10 +197,12 @@ class Recorder private constructor(
          * Opens a file and starts the writer.
          *
          * Throws if it cannot, because a recording that silently did not start is the worst outcome
-         * available — you find out when you go looking for the take.
+         * available — you find out when you go looking for the take. Throws, too, if [file] already
+         * exists: a take is always a new file, and opening an old one would empty it.
          */
         fun start(file: File, sampleRate: Int): Recorder {
             file.parentFile?.mkdirs()
+            java.nio.file.Files.createFile(file.toPath())
             val output = RandomAccessFile(file, "rw")
             try {
                 output.setLength(0)

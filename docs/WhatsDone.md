@@ -251,6 +251,9 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **Nothing kept is written over or lost without asking, 2.0.6-beta.** Lane saves ask before
+  replacing, quitting and updating warn about unsaved lanes, recordings and downloads take free
+  names, and preset names cannot steer a recording out of its folder.
 - **Update replaces only its own file, 2.0.5-beta.** A copy started from inside another AppImage no
   longer takes that image for its own, and the clean-up keeps browser downloads and copies in use.
 - **The top bar grows when it wraps, 2.0.3-beta.** Rescan, Start and Rec stay reachable on a narrow

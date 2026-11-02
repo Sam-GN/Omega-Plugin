@@ -176,7 +176,7 @@ class MainWindow : JFrame("Omega-Plugin") {
     private val levelValue1 = fixedValueLabel()
     private val levelValue2 = fixedValueLabel()
 
-    private val titleBar = TitleBar(this, "Omega-Plugin") { shutdown() }
+    private val titleBar = TitleBar(this, "Omega-Plugin") { requestQuit() }
 
     /** Where the window is, kept for the next run; see `WindowPlacement`. */
     private val placement = WindowPlacement.Tracker(this)
@@ -829,6 +829,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         titleBar.updateHost = object : UpdatePanel.Host {
             override val window: java.awt.Window get() = this@MainWindow
             override fun isStreaming(): Boolean = engine.isRunning
+            override fun unsavedLanes(): Int = looper.unsavedLanes()
             override fun exitAfterSaving(launch: () -> Unit) = shutdown(launch)
         }
         reloadPresets(announce = true)
@@ -837,7 +838,7 @@ class MainWindow : JFrame("Omega-Plugin") {
 
         // Alt+F4 and a WM_CLOSE from outside still arrive here even without a native close button.
         addWindowListener(object : WindowAdapter() {
-            override fun windowClosing(e: WindowEvent) = shutdown()
+            override fun windowClosing(e: WindowEvent) = requestQuit()
             override fun windowOpened(e: WindowEvent) = if (LinuxPlatform.isLinux) liftVeilSettled() else liftVeil()
         })
 
@@ -1823,6 +1824,26 @@ class MainWindow : JFrame("Omega-Plugin") {
         setStatus("Deleted preset \"${preset.name}\".", Theme.TEXT_DIM)
     }
 
+    /**
+     * The user asking to quit — ✕, Exit, Alt+F4 — which loses any loop lane recorded and not saved,
+     * because lanes live only in memory. So it asks first, and only then. An update asks in its own
+     * dialog before it downloads, since by the time it quits the download is done.
+     */
+    private fun requestQuit() {
+        val unsaved = looper.unsavedLanes()
+        if (unsaved > 0) {
+            val quit = ConfirmDialog.ask(
+                owner = loopWindow ?: this,
+                title = "Unsaved loop lanes",
+                message = lanesLost(unsaved),
+                detail = if (unsaved == 1) "Quitting loses it. To keep it, press its SAVE first." else "Quitting loses them. To keep one, press its SAVE first.",
+                confirmText = "Quit",
+            )
+            if (!quit) return
+        }
+        shutdown()
+    }
+
     /** The single teardown path: the title bar's close button, Alt+F4 and WM_CLOSE all land here. */
     /**
      * The way out, for the ✕, for Exit, and for an update.
@@ -1999,7 +2020,20 @@ class MainWindow : JFrame("Omega-Plugin") {
         val directory = chooser.directory ?: return null
         val name = chooser.file ?: return null
         val named = if (!load && !name.contains('.')) "$name.wav" else name
-        return File(directory, named)
+        val file = File(directory, named)
+        // The dialog asked about replacing the name that was typed. `riff` became `riff.wav` after
+        // it closed, so an existing `riff.wav` was never asked about, and was written over.
+        if (!load && named != name && file.exists()) {
+            val replace = ConfirmDialog.ask(
+                owner = owner,
+                title = "Replace file",
+                message = "Replace \"$named\"?",
+                detail = "A file with that name is already in ${directory.trimEnd('/', '\\')}. Saving the lane writes over it.",
+                confirmText = "Replace",
+            )
+            if (!replace) return null
+        }
+        return file
     }
 
     /** The eye: one preference for both boards, remembered unless this is the restore of it. */
@@ -2716,10 +2750,13 @@ class MainWindow : JFrame("Omega-Plugin") {
         val stamp = java.time.LocalDateTime.now()
             .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"))
         // Named after the preset as well as the time, because "which of these is the one with the
-        // GOAT capture" is a question you will ask.
-        val patch = loaded?.name?.let { " $it" }.orEmpty()
-        val target = folder.resolve("$stamp$patch.wav").toFile()
-        val twinTarget = folder.resolve("$stamp$patch$TWIN_SUFFIX.wav").toFile()
+        // GOAT capture" is a question you will ask. The preset's name made safe first: it may have
+        // come from a file somebody sent, and a `/` or `..` in it must not reach outside the folder.
+        // Never an existing file's name: two takes in one second would otherwise share one.
+        val patch = loaded?.name?.let { org.example.util.FileNames.part(it) }?.takeIf { it.isNotEmpty() }?.let { " $it" }.orEmpty()
+        val base = org.example.util.FileNames.freeBase(folder, "$stamp$patch") { listOf("$it.wav", "$it$TWIN_SUFFIX.wav") }
+        val target = folder.resolve("$base.wav").toFile()
+        val twinTarget = folder.resolve("$base$TWIN_SUFFIX.wav").toFile()
 
         try {
             val started = Recorder.start(target, displayRate)
@@ -3339,6 +3376,10 @@ class MainWindow : JFrame("Omega-Plugin") {
             start()
         }
     }
+
+    /** "1 loop lane is not saved." / "3 loop lanes are not saved." */
+    private fun lanesLost(count: Int): String =
+        if (count == 1) "1 loop lane is not saved." else "$count loop lanes are not saved."
 
     private companion object {
         /**

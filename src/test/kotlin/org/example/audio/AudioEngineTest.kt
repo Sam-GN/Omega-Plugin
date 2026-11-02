@@ -57,7 +57,7 @@ class AudioEngineTest {
      */
     @Test
     fun `render feeds the recorder, before the output clamp`() {
-        val file = java.nio.file.Files.createTempFile("omega-engine-rec", ".wav").toFile()
+        val file = java.nio.file.Files.createTempFile("omega-engine-rec", ".wav").toFile().also { it.delete() }
         try {
             val engine = engineWith()
             val recorder = Recorder.start(file, 48_000)

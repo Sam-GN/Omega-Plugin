@@ -359,4 +359,24 @@ class LooperTest {
     private fun assertEquals(expected: Int, actual: Int, tolerance: Int, message: String) {
         assertTrue(abs(expected - actual) <= tolerance, "$message: expected $expected, got $actual")
     }
+
+    @Test
+    fun `a recorded lane is unsaved until it is saved, and a loaded one never is`() {
+        val looper = looper()
+        assertEquals(0, looper.unsavedLanes())
+        val first = looper.lanes[0]
+        looper.arm(first)
+        repeat(5) { block(looper, 0.1f) }
+        looper.stopRecording(first)
+        block(looper, 0f)
+        assertEquals(1, looper.unsavedLanes(), "recorded and not saved")
+        looper.markSaved(first, "riff.wav")
+        assertEquals(0, looper.unsavedLanes(), "saved")
+        assertEquals("riff.wav", first.source)
+        looper.load(looper.lanes[1], FloatArray(100) { 0.2f }, 100, "loop.wav")
+        assertEquals(0, looper.unsavedLanes(), "loaded from a file")
+        looper.clear(first)
+        looper.markSaved(first, "nothing.wav")
+        assertEquals(null, first.source, "an empty lane is not marked")
+    }
 }

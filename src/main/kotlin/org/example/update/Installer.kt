@@ -70,7 +70,7 @@ object UnreadablePathInstaller : Installer {
 
     const val REASON =
         "This system's language setting cannot spell the name of the folder this program is in, so " +
-            "it cannot replace itself. Replace it by hand."
+            "it cannot replace itself."
 
     override fun cannotApply(): String = REASON
 
@@ -122,7 +122,7 @@ class AppImageInstaller(
         val folder = running.parent
         if (folder == null || !Files.isDirectory(folder) || !Files.isWritable(folder)) {
             return "Could not write to the folder holding the AppImage, $folder, so this copy " +
-                "cannot replace itself. Replace the file by hand."
+                "cannot replace itself."
         }
         return null
     }
@@ -255,9 +255,11 @@ class WindowsInstaller(
         val target = installDir ?: throw UpdateException(Installer.NOT_FROM_BUNDLE, reachedServer = true)
         val exe = launcher!!.fileName.toString()
         progress("Unpacking…")
-        val expanded = temp.resolve(STAGE_FOLDER)
-        deleteTree(expanded)
-        Files.createDirectories(expanded)
+        // A folder of its own, made new: a fixed name in the shared temp folder would be emptied
+        // whatever was already in it. The marker is what lets the start-up sweep tell an abandoned
+        // stage of ours from anything else with a similar name.
+        val expanded = Files.createTempDirectory(temp, STAGE_PREFIX)
+        Files.writeString(expanded.resolve(STAGE_MARKER), "Omega-Plugin update")
         try {
             unzip(download, expanded)
         } catch (e: IOException) {
@@ -277,15 +279,21 @@ class WindowsInstaller(
                 throw UpdateException("The download has no $name folder, so it is not a whole bundle.", reachedServer = true)
             }
         }
-        val helper = temp.resolve(HELPER_NAME)
+        val helper = temp.resolve(expanded.fileName.toString() + ".cmd")
         Files.writeString(helper, helperScript(pid, source, target, exe, download, expanded))
         progress("Ready to restart…")
         return { run(helper) }
     }
 
     companion object {
-        const val HELPER_NAME = "omega-update.cmd"
-        const val STAGE_FOLDER = "omega-update"
+        /** Every stage folder starts with this, and its helper is the folder's name plus `.cmd`. */
+        const val STAGE_PREFIX = "omega-update-"
+
+        /** Inside every stage folder; see [Leftovers]. */
+        const val STAGE_MARKER = ".omega-update-stage"
+
+        /** How the helper's file begins, which is how [Leftovers] knows one of its own. */
+        const val HELPER_HEADER = "@echo off\r\nrem Omega-Plugin update helper."
 
         /** The folders the helper mirrors with `/MIR`; each must arrive with something in it. */
         val MIRRORED = listOf("app", "runtime")
@@ -303,7 +311,7 @@ class WindowsInstaller(
          */
         fun cmdValue(path: Path): String = path.toString().replace("%", "%%")
         const val NOT_WRITABLE =
-            "Could not write to the program folder, so this copy cannot replace itself. Unzip the download over it by hand."
+            "Could not write to the program folder, so this copy cannot replace itself."
 
         /** Proof by doing: create and delete a file. Permissions on Windows are not worth reading. */
         fun isWritable(folder: Path): Boolean {

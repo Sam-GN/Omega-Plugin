@@ -234,6 +234,17 @@ class Looper {
         if (lane.recording || lane.armed) lane.stopRequested = true
     }
 
+    /**
+     * Lanes holding audio recorded here and not saved since. Lanes live only in memory, so these are
+     * what quitting or updating loses; a lane loaded from a file, or saved to one, is not counted.
+     */
+    fun unsavedLanes(): Int = lanes.count { !it.isEmpty && it.source == RECORDED }
+
+    /** After [lane] was written to a file called [name]: it is no longer only in memory. */
+    fun markSaved(lane: Lane, name: String) {
+        if (!lane.isEmpty) lane.source = name
+    }
+
     /** Whether any lane is recording or waiting to. */
     val isRecording: Boolean get() = lanes.any { it.recording || it.armed }
 

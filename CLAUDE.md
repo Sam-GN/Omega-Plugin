@@ -581,6 +581,16 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   nothing open between files. Each of those rules has a test saying what must survive, and the
   tests run on Windows too, where Java names an owner `MACHINE\user`: the owner is compared by
   account name (2.0.4).
+- **Nothing the program creates replaces anything.** Every file it makes on its own account takes a
+  free name through `util/FileNames`: a recording and its drums copy (`freeBase`, and `Recorder.start`
+  refuses an existing file outright, since opening one empties it), a preset file, and a Download
+  that could not be installed (`free`, ` (2)` beside an existing copy). A name from a user or from a
+  preset somebody sent goes through `FileNames.part` before it is part of a path, so `/`, `\` and `..`
+  cannot steer a file out of its folder. Saving a lane asks before replacing when `.wav` was added
+  after the dialog closed, because the dialog only checked the name typed. Quitting and updating ask
+  when lanes hold recorded audio not yet saved (`Looper.unsavedLanes`; SAVE marks a lane saved).
+  On Windows each update stages into a new `omega-update-*` folder with `STAGE_MARKER` in it, and
+  `Leftovers.sweepStages` removes only those, and helpers that begin as the helper does.
 - **What a user keeps carries no version.** `Omega-Plugin-Linux.AppImage`, the `OmegaPlugin` folder
   and `OmegaPlugin.jar` inside either bundle, since 2.0.0: a shortcut needs a path that survives an
   update, and a name that survives an update cannot truthfully state a version. The jar is on the
@@ -590,7 +600,7 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   says why. No migration was written, because nothing before 1.8.0 can update itself and 1.8.0 to
   1.9.x were never published: everyone arrives at 2.0.0 by hand.
 - **Windows replaces in place.** `WindowsInstaller` expands the zip itself (`java.util.zip`), then
-  writes `omega-update.cmd` — plain `cmd`: wait on the PID with `tasklist`,
+  writes `omega-update-<n>.cmd` beside its own stage folder — plain `cmd`: wait on the PID with `tasklist`,
   `robocopy` the new folder **into** the installed one, start the exe, clean up, delete itself —
   and starts it minimised. Into the folder rather than beside it because moving the exe breaks every
   shortcut and taskbar pin. `app` and `runtime` are mirrored with `/MIR`, so a file a version
@@ -848,7 +858,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-475 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+485 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

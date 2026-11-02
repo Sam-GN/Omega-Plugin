@@ -19,6 +19,7 @@
  */
 package org.example.update
 
+import org.example.util.FileNames
 import org.example.util.Log
 import java.nio.file.Files
 import java.nio.file.Path
@@ -80,8 +81,10 @@ class Updater(
             runCatching { Files.deleteIfExists(part) }
             throw t
         }
-        val file = folder.resolve(if (reason == null) installer.stagedName(asset.name) else asset.name)
-        Files.move(part, file, StandardCopyOption.REPLACE_EXISTING)
+        // A download it cannot install goes beside whatever is already in Downloads, never over it:
+        // a file of the same name there is the user's, an earlier download they may mean to keep.
+        val file = if (reason == null) folder.resolve(installer.stagedName(asset.name)) else FileNames.free(folder, asset.name)
+        if (reason == null) Files.move(part, file, StandardCopyOption.REPLACE_EXISTING) else Files.move(part, file)
         Log.info("update", "Downloaded and verified $file")
         if (reason != null) {
             // What the user does next is run it. The zip on Windows has no such bit to set.

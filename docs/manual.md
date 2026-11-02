@@ -583,7 +583,7 @@ Each row has, left to right:
 | --- | --- |
 | **✕** | Clears a lane that has something in it. Removes a lane that is empty. Lane 1 is never removed. |
 | **+** | Adds another lane below, up to four. Only lit on the last lane. |
-| **SAVE** | Writes this lane to a WAV file you choose. |
+| **SAVE** | Writes this lane to a WAV file you choose. If a file of that name is already there, it asks before replacing it. Once saved, the lane shows the file's name. |
 | **LOAD** | Loads a sound file into this lane: its first minute, mixed to mono, converted to the stream's rate. Any file the program's Java runtime can read, and WAV always works. |
 | **REC** | Records this lane. Reads STOP while recording. |
 | **ORDER** | AFTER or THRU. See below. |
@@ -631,7 +631,8 @@ refused while a lane is recording.
 - Lanes keep their audio when you hide the loop box, pop it out, stop the stream, or change the
   sample rate (they are converted to the new rate). Closing the box stops playback with a fade and
   keeps the audio. Only quitting the program loses them, and **Update** on the About dialog quits
-  it, so **use SAVE** for anything you want to keep.
+  it, so **use SAVE** for anything you want to keep. Quitting and Update both ask first when a lane
+  holds a recording you have not saved.
 - The program remembers whether the box was open, the key bindings, and where the pop-out window
   was. It does not store the audio.
 
@@ -787,7 +788,7 @@ under **☰ → About**, and it says so right under the first of them.
   The line shows the download's progress, then "Checking…", then "Unpacking…" on Windows or
   "Testing the new version…" on Linux, then "Restarting…", and the window closes. Closing is the same as **Exit**: a running take is
   finished and the session is saved, but loop lanes you have not saved are gone, so press SAVE on
-  them first. A moment later the new version opens with your session, settings and presets as they
+  them first; if any are not saved, Update says so and asks before it starts. A moment later the new version opens with your session, settings and presets as they
   were. On Windows the folder you extracted is refilled in place; on Linux the new AppImage is first
   run once to prove it starts on your machine, then replaces the old file under the old file's name.
   If it does not start, the line says so, the download is deleted and the version you have carries
@@ -795,8 +796,10 @@ under **☰ → About**, and it says so right under the first of them.
 - **When it cannot replace itself**, the button reads **Download** instead and the line says why:
   the program is in a folder it is not allowed to write to, such as `Program Files`, it was not
   installed from a release bundle (or was started from inside another AppImage), or the system's
-  language setting cannot spell the name of its folder. The checked download goes to your Downloads folder, and you
-  install it by hand as in [Installing and updating](#installing-and-updating).
+  language setting cannot spell the name of its folder. The checked download goes to your Downloads
+  folder, beside anything already there rather than over it, and the line says how to install it:
+  move it over your old copy (on Windows, unzip it over your OmegaPlugin folder), so you keep one
+  copy and your shortcuts open the new version.
 - A download that does not match what was published is deleted and the line says so. That is a
   reason to look at the Releases page, not to press again.
 

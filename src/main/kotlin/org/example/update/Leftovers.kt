@@ -55,6 +55,8 @@ object Leftovers {
     fun sweep() {
         val partials = sweepPartials(listOf(Updates.installer().downloadFolder(), Updates.downloadsFolder()), System.currentTimeMillis())
         if (partials > 0) Log.info("update", "Removed $partials file(s) left by an update that did not finish.")
+        val stages = sweepStages(Updates.installer().downloadFolder(), System.currentTimeMillis())
+        if (stages > 0) Log.info("update", "Removed $stages unpacked update(s) that were never installed.")
         if (!LinuxPlatform.isLinux) return
         val temp = Path.of(System.getenv("TMPDIR")?.takeIf { it.isNotBlank() } ?: "/tmp")
         val own = Path.of(System.getProperty("java.home")).parent
@@ -80,6 +82,36 @@ object Leftovers {
         }
         return removed
     }
+
+    /**
+     * Windows: a stage folder and its helper script, left when the program died between unpacking
+     * an update and installing it. A folder goes only with [WindowsInstaller.STAGE_MARKER] in it, a
+     * script only if it begins as the helper does, and either only once untouched for
+     * [PARTIAL_AGE_MILLIS]: the name alone could be anyone's.
+     */
+    fun sweepStages(folder: Path, nowMillis: Long): Int {
+        var removed = 0
+        val found = runCatching { Files.list(folder).use { it.toList() } }.getOrDefault(emptyList())
+        for (entry in found) {
+            val name = entry.fileName.toString()
+            if (!name.startsWith(WindowsInstaller.STAGE_PREFIX)) continue
+            val age = runCatching { nowMillis - Files.getLastModifiedTime(entry).toMillis() }.getOrDefault(0L)
+            if (age < PARTIAL_AGE_MILLIS) continue
+            if (Files.isDirectory(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                Files.isRegularFile(entry.resolve(WindowsInstaller.STAGE_MARKER))
+            ) {
+                deleteTree(entry)
+                if (!Files.exists(entry)) removed++
+            } else if (name.endsWith(".cmd") && Files.isRegularFile(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS) && isHelper(entry)) {
+                if (runCatching { Files.delete(entry) }.isSuccess) removed++
+            }
+        }
+        return removed
+    }
+
+    private fun isHelper(file: Path): Boolean = runCatching {
+        Files.newInputStream(file).use { String(it.readNBytes(WindowsInstaller.HELPER_HEADER.length), Charsets.UTF_8) }
+    }.getOrNull() == WindowsInstaller.HELPER_HEADER
 
     /**
      * Proof, not a guess from the prefix: the program's own desktop entry and its jar, in a folder

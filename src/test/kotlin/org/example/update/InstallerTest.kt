@@ -42,6 +42,10 @@ class InstallerTest {
 
     private fun tempDir(): Path = Files.createTempDirectory("omega-install")
 
+    /** What staging leaves in [temp]: its folders and helpers, by their prefix. */
+    private fun stages(temp: Path): List<Path> =
+        Files.list(temp).use { it.toList() }.filter { it.fileName.toString().startsWith(WindowsInstaller.STAGE_PREFIX) }
+
     private fun deleteTree(folder: Path) {
         if (!Files.exists(folder)) return
         Files.walk(folder).use { it.sorted(Comparator.reverseOrder()).forEach { p -> Files.deleteIfExists(p) } }
@@ -298,7 +302,8 @@ class InstallerTest {
             assertEquals(temp, installer.downloadFolder())
 
             val finish = installer.stage(zip) { }
-            val stage = temp.resolve(WindowsInstaller.STAGE_FOLDER)
+            val stage = stages(temp).single { Files.isDirectory(it) }
+            assertTrue(Files.isRegularFile(stage.resolve(WindowsInstaller.STAGE_MARKER)), "marked as ours")
             val root = stage.resolve("OmegaPlugin-1.8.1-beta")
             assertTrue(Files.isRegularFile(root.resolve("OmegaPlugin.exe")))
             assertTrue(Files.isRegularFile(root.resolve("app/OmegaPlugin-1.8.1-beta-all.jar")))
@@ -307,7 +312,7 @@ class InstallerTest {
             // Nothing in the installed folder has been touched: that is the helper's job, after exit.
             assertEquals("old exe", Files.readString(launcher))
 
-            val helper = temp.resolve(WindowsInstaller.HELPER_NAME)
+            val helper = temp.resolve(stage.fileName.toString() + ".cmd")
             assertTrue(Files.isRegularFile(helper))
             assertTrue(ran.isEmpty(), "the helper is not started by staging")
             finish()
@@ -332,7 +337,7 @@ class InstallerTest {
             val failure = runCatching { installer.stage(zip) { } }.exceptionOrNull()
             assertTrue(failure is UpdateException, "refused: $failure")
             assertContains(failure.message!!, "OmegaPlugin.exe")
-            assertFalse(Files.exists(temp.resolve(WindowsInstaller.STAGE_FOLDER)))
+            assertTrue(stages(temp).isEmpty(), "the stage is cleaned up")
         } finally {
             deleteTree(temp)
             deleteTree(install)
@@ -428,13 +433,35 @@ class InstallerTest {
                 val failure = runCatching { installer.stage(zip) { } }.exceptionOrNull()
                 assertTrue(failure is UpdateException, "refused for an empty $missing: $failure")
                 assertContains(failure.message!!, missing)
-                assertFalse(Files.exists(temp.resolve(WindowsInstaller.HELPER_NAME)), "no helper for an empty $missing")
-                assertFalse(Files.exists(temp.resolve(WindowsInstaller.STAGE_FOLDER)), "the stage is cleaned up")
+                assertTrue(stages(temp).isEmpty(), "no stage and no helper for an empty $missing")
                 assertEquals("installed jar", Files.readString(install.resolve("app/OmegaPlugin.jar")), "the installed program is untouched")
             } finally {
                 deleteTree(temp)
                 deleteTree(install)
             }
+        }
+    }
+
+    @Test
+    fun `windows - staging never touches a folder or file of the same old name, and each stage is new`() {
+        val temp = tempDir()
+        val install = tempDir()
+        try {
+            // What 2.0.5 and earlier would have emptied: names nobody can be sure are ours.
+            val theirs = Files.createDirectories(temp.resolve("omega-update")).resolve("their file.txt").also { Files.writeString(it, "theirs") }
+            val theirScript = temp.resolve("omega-update.cmd").also { Files.writeString(it, "theirs") }
+            val launcher = install.resolve("OmegaPlugin.exe").also { Files.writeString(it, "old exe") }
+            val zip = temp.resolve("Omega-Plugin-2.0.6-beta-Windows.zip")
+            writeBundleZip(zip, "OmegaPlugin")
+            val installer = WindowsInstaller(launcher, temp, 1) { }
+            installer.stage(zip) { }
+            installer.stage(zip) { }
+            assertEquals("theirs", Files.readString(theirs))
+            assertEquals("theirs", Files.readString(theirScript))
+            assertEquals(2, stages(temp).count { Files.isDirectory(it) }, "a new folder each time")
+        } finally {
+            deleteTree(temp)
+            deleteTree(install)
         }
     }
 }

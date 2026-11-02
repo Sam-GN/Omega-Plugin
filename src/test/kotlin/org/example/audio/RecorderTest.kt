@@ -65,7 +65,7 @@ class RecorderTest {
 
     @Test
     fun `writes a canonical IEEE float wav header`() {
-        val file = Files.createTempFile("omega-rec", ".wav").toFile()
+        val file = Files.createTempFile("omega-rec", ".wav").toFile().also { it.delete() }
         try {
             val frames = 512
             val blocks = 10
@@ -112,7 +112,7 @@ class RecorderTest {
      */
     @Test
     fun `samples survive the round trip, including peaks above full scale`() {
-        val file = Files.createTempFile("omega-rec", ".wav").toFile()
+        val file = Files.createTempFile("omega-rec", ".wav").toFile().also { it.delete() }
         try {
             val frames = 256
             val blocks = 4
@@ -132,7 +132,7 @@ class RecorderTest {
     /** A second implementation agrees it is a wav — the closest thing here to "Audacity opens it". */
     @Test
     fun `another decoder reads it back`() {
-        val file = Files.createTempFile("omega-rec", ".wav").toFile()
+        val file = Files.createTempFile("omega-rec", ".wav").toFile().also { it.delete() }
         try {
             recordInto(file, 48_000, 8, 512) { 0.5f }
 
@@ -157,7 +157,7 @@ class RecorderTest {
      */
     @Test
     fun `a file abandoned mid-recording still describes what it holds`() {
-        val file = Files.createTempFile("omega-rec", ".wav").toFile()
+        val file = Files.createTempFile("omega-rec", ".wav").toFile().also { it.delete() }
         val rate = 8_000 // Low, so the five-second patch interval arrives quickly.
         try {
             val recorder = Recorder.start(file, rate)
@@ -186,7 +186,7 @@ class RecorderTest {
 
     @Test
     fun `a full ring drops whole blocks and counts them`() {
-        val file = Files.createTempFile("omega-rec", ".wav").toFile()
+        val file = Files.createTempFile("omega-rec", ".wav").toFile().also { it.delete() }
         try {
             val recorder = Recorder.start(file, 48_000)
             // Far more than the ring holds, faster than any writer could drain it.
@@ -198,6 +198,20 @@ class RecorderTest {
             assertTrue(dropped > 0, "the ring should have overflowed in this test")
             // Whole blocks only: a partial write would shorten the file against the performance.
             assertEquals(0L, dropped % 4096, "dropped $dropped frames, not a whole number of blocks")
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun `a take never opens a file that is already there`() {
+        // Opening an existing file to record into would empty it first.
+        val file = Files.createTempFile("omega-rec", ".wav").toFile()
+        try {
+            file.writeText("a take somebody kept")
+            val refused = runCatching { Recorder.start(file, 48_000) }.exceptionOrNull()
+            assertTrue(refused is java.nio.file.FileAlreadyExistsException, "refused: $refused")
+            assertEquals("a take somebody kept", file.readText())
         } finally {
             file.delete()
         }

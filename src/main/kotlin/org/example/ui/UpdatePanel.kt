@@ -57,6 +57,9 @@ class UpdatePanel(private val host: Host) : JPanel() {
         val window: Window?
         fun isStreaming(): Boolean
 
+        /** Loop lanes recorded and not saved, which an update's restart would lose. */
+        fun unsavedLanes(): Int
+
         /** Stops the stream, saves the session and settings, runs [launch], exits. */
         fun exitAfterSaving(launch: () -> Unit)
     }
@@ -218,14 +221,21 @@ class UpdatePanel(private val host: Host) : JPanel() {
 
     private fun update() {
         val verdict = available ?: return
-        if (host.isStreaming() && installer.cannotApply() == null) {
+        // Only where it will restart: a Download closes nothing.
+        val lanes = host.unsavedLanes()
+        if (installer.cannotApply() == null && (host.isStreaming() || lanes > 0)) {
+            val lost = when (lanes) {
+                0 -> ""
+                1 -> "1 loop lane is not saved and will be lost; to keep it, press its SAVE first. "
+                else -> "$lanes loop lanes are not saved and will be lost; to keep one, press its SAVE first. "
+            }
             val go = ConfirmDialog.ask(
                 owner = host.window,
                 title = "Update",
-                message = "Updating stops the sound and closes Omega-Plugin.",
-                detail = "It opens again as the new version when the update is done.",
+                message = if (host.isStreaming()) "Updating stops the sound and closes Omega-Plugin." else "Updating closes Omega-Plugin.",
+                detail = lost + "It opens again as the new version when the update is done.",
                 confirmText = "Update",
-                confirmColour = Theme.ACCENT_SOFT,
+                confirmColour = if (lanes > 0) Theme.BAD else Theme.ACCENT_SOFT,
             )
             if (!go) return
         }
@@ -268,7 +278,7 @@ class UpdatePanel(private val host: Host) : JPanel() {
 
         override fun downloaded(file: Path, reason: String) {
             checkButton.isEnabled = true
-            say(detail, "Downloaded ${file.fileName} to ${file.parent}. $reason", Theme.TEXT)
+            say(detail, "Downloaded ${file.fileName} to ${file.parent}. $reason ${Updates.howToInstall(platform)}", Theme.TEXT)
         }
 
         override fun readyToRestart(launch: () -> Unit) {
