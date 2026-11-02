@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "org.example"
-version = "1.9.3-beta"
+version = "2.0.1-beta"
 
 repositories {
     mavenCentral()
@@ -89,6 +89,18 @@ application {
     // collector at startup and says so rather than quietly running badly.
     applicationDefaultJvmArgs = gcArgs
 }
+
+/*
+ * What a user keeps never carries the version: the AppImage, the Windows folder, and the jar inside
+ * either bundle. A shortcut points at a path, so the path has to survive an update, and a path that
+ * survives an update cannot say which version it holds without eventually lying. The jar is in that
+ * list because unzipping a new version over an old folder by hand would otherwise leave the old jar
+ * beside the new one. Only `build/libs` and the Windows zip, which is thrown away once extracted,
+ * keep the version. About, `--version` and the exe's Properties say what is really installed.
+ * ShippedNamesTest holds this.
+ */
+val bundleJar = "OmegaPlugin.jar"
+val bundleFolder = "OmegaPlugin"
 
 // Single self-contained jar that runs on Windows and Linux with `java -jar`.
 val fatJar by tasks.registering(Jar::class) {
@@ -375,7 +387,7 @@ val portableScripts by tasks.registering {
     group = "distribution"
     description = "Writes the portable bundle's launchers and its read-me"
     val outputDir = portableScriptsDir
-    val jarName = "OmegaPlugin-${project.version}-all.jar"
+    val jarName = bundleJar
     val flags = gcArgs.joinToString(" ")
     val versionText = project.version.toString()
     outputs.dir(outputDir)
@@ -426,8 +438,8 @@ val portableZip by tasks.registering(Zip::class) {
     description = "Self-contained Windows x64 zip: program, launchers and a bundled Java 21 runtime"
     archiveFileName.set("OmegaPlugin-${project.version}-windows-x64-portable.zip")
     destinationDirectory.set(layout.buildDirectory.dir("distributions"))
-    val root = "OmegaPlugin-${project.version}"
-    into("$root/lib") { from(fatJar) }
+    val root = bundleFolder
+    into("$root/lib") { from(fatJar) { rename { bundleJar } } }
     into("$root/runtime") { from(portableRuntime) }
     into(root) {
         from(portableScripts)
@@ -537,7 +549,7 @@ val exeInputDir = layout.buildDirectory.dir("exe/input")
 val exeInput by tasks.registering(Sync::class) {
     group = "distribution"
     description = "Stages the fat jar on its own for jpackage --input"
-    from(fatJar)
+    from(fatJar) { rename { bundleJar } }
     into(exeInputDir)
 }
 
@@ -574,7 +586,7 @@ val exeImage by tasks.registering(Exec::class) {
             "--name", "OmegaPlugin",
             "--app-version", exeVersion,
             "--input", exeInputDir.get().asFile.absolutePath,
-            "--main-jar", "OmegaPlugin-${project.version}-all.jar",
+            "--main-jar", bundleJar,
             "--main-class", "org.example.MainKt",
             "--runtime-image", portableRuntimeDir.get().asFile.absolutePath,
             "--icon", windowsIconFile.get().asFile.absolutePath,
@@ -650,7 +662,7 @@ val exeZip by tasks.registering(Zip::class) {
     archiveFileName.set("Omega-Plugin-${project.version}-Windows.zip")
     destinationDirectory.set(layout.buildDirectory.dir("distributions"))
     dependsOn(exeImage)
-    into("OmegaPlugin-${project.version}") {
+    into(bundleFolder) {
         from(exeImageDir.map { it.dir("OmegaPlugin") })
         from(exeExtras)
         // GPLv3 section 4, the same as everywhere else: the licence travels with the program.
@@ -704,7 +716,7 @@ val appDirGenerated = layout.buildDirectory.dir("appimage/generated")
 val appDirFiles by tasks.registering {
     group = "distribution"
     description = "Writes AppRun, the .desktop entry and the runtime notice for the AppDir"
-    val jarName = "OmegaPlugin-${project.version}-all.jar"
+    val jarName = bundleJar
     val flags = gcArgs.joinToString(" ")
     val versionText = project.version.toString()
     val outputDir = appDirGenerated
@@ -721,7 +733,7 @@ val appDirFiles by tasks.registering {
             """
             #!/bin/sh
             # Omega-Plugin AppImage launcher. Runs the Java inside this image, never one from PATH.
-            # Diagnostics work from a terminal:  ./Omega-Plugin-*.AppImage --list-backends
+            # Diagnostics work from a terminal:  ./Omega-Plugin-Linux.AppImage --list-backends
             HERE="${'$'}(dirname "${'$'}(readlink -f "${'$'}0")")"
             exec "${'$'}HERE/runtime/bin/java" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 $flags -jar "${'$'}HERE/lib/$jarName" "${'$'}@"
             """.trimIndent() + "\n"
@@ -751,7 +763,7 @@ val appDirStage by tasks.registering(Sync::class) {
     group = "distribution"
     description = "Assembles the AppDir: AppRun, .desktop, icon, jar and the bundled runtime"
     into(appDir)
-    into("lib") { from(fatJar) }
+    into("lib") { from(fatJar) { rename { bundleJar } } }
     into("runtime") { from(portableRuntime) }
     from(appDirFiles)
     from(rootProject.file("LICENSE"))
@@ -774,10 +786,10 @@ val appDirStage by tasks.registering(Sync::class) {
  */
 val appImage by tasks.registering(Exec::class) {
     group = "distribution"
-    description = "Packs the AppDir into Omega-Plugin-<version>-Linux.AppImage (Linux only)"
+    description = "Packs the AppDir into Omega-Plugin-Linux.AppImage (Linux only)"
     dependsOn(appDirStage)
-    // The name a guitarist reads on the release page, matching the Windows zip's "-Windows".
-    val output = layout.buildDirectory.file("distributions/Omega-Plugin-${project.version}-Linux.AppImage")
+    // No version: this file is the installed program as well as the download. See bundleJar.
+    val output = layout.buildDirectory.file("distributions/Omega-Plugin-Linux.AppImage")
     val tool = (findProperty("appimagetool") as String?) ?: System.getenv("APPIMAGETOOL") ?: "appimagetool"
     inputs.dir(appDir)
     outputs.file(output)

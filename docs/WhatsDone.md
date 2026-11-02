@@ -251,6 +251,11 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **Release notes read as text, 2.0.1-beta.** The update dialog shows the changelog as paragraphs and
+  bullets rather than raw markdown; `ReleaseNotes.plain` is tested against every section of it.
+- **Names without versions, 2.0.0-beta.** `Omega-Plugin-Linux.AppImage`, an `OmegaPlugin` folder, and
+  `OmegaPlugin.jar` inside either, so an update changes the program and no path, and nothing left on
+  disk can name the wrong version.
 - **About opens whatever the locale, 1.9.3-beta.** A path Java cannot represent used to stop the
   dialog appearing; the copy now offers Download and says why.
 - **The Linux update run for real, 1.9.1-beta.** Real AppImages through the real window found three

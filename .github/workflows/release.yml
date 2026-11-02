@@ -169,7 +169,7 @@ jobs:
       - name: Smoke-test the AppImage
         shell: bash
         run: |
-          image=$(ls build/distributions/Omega-Plugin-*-Linux.AppImage)
+          image=build/distributions/Omega-Plugin-Linux.AppImage
           APPIMAGE_EXTRACT_AND_RUN=1 "$image" --list-backends | tee report.txt
           grep -q "Collector: generational ZGC. Good." report.txt
           # The updater runs a new image with --version before replacing anything, so an image that
@@ -184,7 +184,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: build/distributions/Omega-Plugin-*-Linux.AppImage
+          path: build/distributions/Omega-Plugin-Linux.AppImage
           if-no-files-found: error
 
       - name: Upload test results
@@ -224,7 +224,7 @@ jobs:
         env:
           TAG: ${{ needs.version.outputs.tag }}
         run: |
-          (cd dist && sha256sum Omega-Plugin-*-Windows.zip Omega-Plugin-*-Linux.AppImage > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          (cd dist && sha256sum Omega-Plugin-*-Windows.zip Omega-Plugin-Linux.AppImage > SHA256SUMS.txt && cat SHA256SUMS.txt)
           version="${TAG#v}"
           awk -v heading="## [$version]" 'index($0, heading) == 1 { on = 1; next } on && /^---$/ { exit } on' CHANGELOG.md > notes.md
           if ! grep -q '[^[:space:]]' notes.md; then
@@ -254,5 +254,5 @@ jobs:
           # attaches the tag's source archives to every release on its own.
           files: |
             dist/Omega-Plugin-*-Windows.zip
-            dist/Omega-Plugin-*-Linux.AppImage
+            dist/Omega-Plugin-Linux.AppImage
             dist/SHA256SUMS.txt

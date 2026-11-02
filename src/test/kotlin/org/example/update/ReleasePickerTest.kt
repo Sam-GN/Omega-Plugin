@@ -113,6 +113,13 @@ class ReleasePickerTest {
     }
 
     @Test
+    fun `the AppImage is matched under its versionless name`() {
+        val image = Asset("Omega-Plugin-Linux.AppImage", 1, "u")
+        assertTrue(Platform.LINUX.matches(image))
+        assertTrue(!Platform.WINDOWS.matches(image))
+    }
+
+    @Test
     fun `asset names are matched by prefix and platform suffix`() {
         assertTrue(Platform.WINDOWS.matches(Asset("Omega-Plugin-1.8.1-beta-Windows.zip", 1, "u")))
         assertTrue(Platform.LINUX.matches(Asset("Omega-Plugin-1.8.1-beta-Linux.AppImage", 1, "u")))

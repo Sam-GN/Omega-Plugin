@@ -21,6 +21,7 @@ package org.example.ui
 
 import org.example.update.Checksums
 import org.example.update.Platform
+import org.example.update.ReleaseNotes
 import org.example.update.Updater
 import org.example.update.Updates
 import org.example.update.Verdict
@@ -74,7 +75,7 @@ class UpdatePanel(private val host: Host) : JPanel() {
         background = Theme.PANEL
         foreground = Theme.TEXT_DIM
         caretColor = Theme.PANEL
-        border = BorderFactory.createEmptyBorder(6, 8, 6, 8)
+        border = BorderFactory.createEmptyBorder(NOTES_TOP_PADDING, 8, NOTES_TOP_PADDING, 8)
         columns = COLUMNS
     }
     private val notesPane = JScrollPane(notes).apply {
@@ -174,18 +175,22 @@ class UpdatePanel(private val host: Host) : JPanel() {
     private fun offer(verdict: Verdict.Available) {
         val asset = verdict.asset ?: return
         available = verdict
-        val body = verdict.release.body.trim().replace("\r\n", "\n")
+        val body = ReleaseNotes.plain(verdict.release.body)
         if (body.isNotEmpty()) {
-            // The body is the CHANGELOG section, which is markdown: a heading line shows as its words.
-            val lines = body.lines().map { line -> if (line.startsWith("#")) line.trimStart('#', ' ') else line }
-            notes.text = lines.take(NOTE_LINES).joinToString("\n") + if (lines.size > NOTE_LINES) "\n…" else ""
+            notes.text = body
             notes.caretPosition = 0
             // Sized here rather than left to the text area: a wrapping `JTextArea` still reports
             // its longest unwrapped line as its preferred width, and a scroll pane built on that
-            // would set the dialog's width from the longest sentence in the notes.
-            val rows = minOf(lines.size, NOTE_LINES).coerceAtLeast(1)
+            // would set the dialog's width from the longest sentence in the notes. The height is
+            // measured at that width, since a paragraph is one line of text and several on screen.
+            // Full notes stop at NOTE_LINES rows with no bottom padding, so the box ends on a whole
+            // row rather than showing the top of the next one in the padding.
+            notes.setSize(WIDTH, Short.MAX_VALUE.toInt())
             val lineHeight = notes.getFontMetrics(notes.font).height
-            notesPane.preferredSize = java.awt.Dimension(WIDTH + 2, rows * lineHeight + 14)
+            val wanted = notes.preferredSize.height
+            val most = NOTES_TOP_PADDING + NOTE_LINES * lineHeight
+            val height = if (wanted <= most + NOTES_TOP_PADDING) wanted else most
+            notesPane.preferredSize = java.awt.Dimension(WIDTH + 2, height + 2)
             notesPane.maximumSize = notesPane.preferredSize
             notesPane.isVisible = true
         }
@@ -284,5 +289,6 @@ class UpdatePanel(private val host: Host) : JPanel() {
         private const val WIDTH = 380
         private const val COLUMNS = 48
         private const val NOTE_LINES = 12
+        private const val NOTES_TOP_PADDING = 6
     }
 }

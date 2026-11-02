@@ -569,11 +569,19 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   the draft is the moment users are told. The newest is chosen **by version**, not by position, so a
   hot-fix published for an older line cannot win. `Versions` is numbers first, then no suffix beats
   a suffix, then suffixes as text.
+- **What a user keeps carries no version.** `Omega-Plugin-Linux.AppImage`, the `OmegaPlugin` folder
+  and `OmegaPlugin.jar` inside either bundle, since 2.0.0: a shortcut needs a path that survives an
+  update, and a name that survives an update cannot truthfully state a version. The jar is on the
+  list because unzipping by hand would otherwise leave the old one beside the new. Only `build/libs`
+  and the Windows zip, thrown away once extracted, keep it. About, `--version` and the exe's Properties
+  are where the version lives. `ShippedNamesTest` holds this, and `bundleJar` in `build.gradle.kts`
+  says why. No migration was written, because nothing before 1.8.0 can update itself and 1.8.0 to
+  1.9.x were never published: everyone arrives at 2.0.0 by hand.
 - **Windows replaces in place.** `WindowsInstaller` expands the zip itself (`java.util.zip`), then
   writes `omega-update.cmd` — plain `cmd`: wait on the PID with `tasklist`, delete `app\*.jar`,
   `robocopy` the new folder **into** the installed one, start the exe, clean up, delete itself —
-  and starts it minimised. Into the folder rather than beside it because extracting a new
-  `OmegaPlugin-<version>\` moves the exe and breaks every shortcut and taskbar pin. The installed
+  and starts it minimised. Into the folder rather than beside it because moving the exe breaks every
+  shortcut and taskbar pin. `del app\*.jar` stays for a jar under any older name. The installed
   folder is `jpackage.app-path`'s parent; writability is proved by writing, and a folder under
   `Program Files` fails that probe and gets download-only. The script is held against a golden copy
   in `src/test/resources/update/`. Two rules it learned on Windows in 1.9.2: it begins with
@@ -589,9 +597,9 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   that it starts here; deleting the old image on the strength of a launch was how 1.8.0 lost
   installs to an image that exited at once. **`--version` must stay a flag every release answers**:
   an image that does not know it opens its window, which fails the 60-second probe harmlessly but
-  means nothing can update to it, and both workflows' smoke tests pin it. The same path rather than
-  the release's name because menu entries, AppImageLauncher integrations, symlinks and renamed files
-  all point at the path; the cost, a stale filename, is `known-issues.md` §8. Both runs use
+  means nothing can update to it, and both workflows' smoke tests pin it. The same path whatever
+  it is called because menu entries, AppImageLauncher integrations, symlinks and renamed files all
+  point at the path. Both runs use
   `childEnvironment`: `APPIMAGE`, `APPDIR`, `OWD` and `ARGV0` removed, because they describe a mount
   about to vanish, and `APPIMAGELAUNCHER_DISABLE=1`, because AppImageLauncher is registered with
   binfmt_misc as the handler for every AppImage and meets an unknown one with a modal prompt. Any
@@ -612,7 +620,8 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   shipped sets it. The Windows path was run end to end that way from an extracted bundle.
 - **The release workflow** publishes `SHA256SUMS.txt` beside the bundles and takes the release body
   from the version's CHANGELOG section — the text between its `## [` heading and the next `---` —
-  so the release page and the dialog show the same human-written notes. A version without a
+  so the release page and the dialog show the same human-written notes; `ReleaseNotes.plain` turns
+  the markdown into what a plain text box can show, and is tested against every section of the file. A version without a
   section fails the publish job.
 
 ### Adding to the rhythm section
@@ -814,7 +823,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-438 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+453 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

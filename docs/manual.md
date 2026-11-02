@@ -90,11 +90,11 @@ any folder you can write to, for instance a folder on the Desktop. Open the fold
 one unit, and moving the `.exe` on its own breaks it. Windows may show a warning the first time
 because the program is not signed. Choose "More info" and then "Run anyway".
 
-**Linux.** Download the file ending in `-Linux.AppImage`. Make it executable and run it:
+**Linux.** Download `Omega-Plugin-Linux.AppImage`. Make it executable and run it:
 
 ```
-chmod +x Omega-Plugin-*-Linux.AppImage
-./Omega-Plugin-*-Linux.AppImage
+chmod +x Omega-Plugin-Linux.AppImage
+./Omega-Plugin-Linux.AppImage
 ```
 
 One file works on every distribution. For the lowest delay, install your distribution's PipeWire
@@ -106,13 +106,15 @@ without.
 **Updating.** Open **☰ → About** and press **Check for updates**. The program asks GitHub for the
 newest release, once, and tells you either that you have it or that a newer one exists, with its
 notes and an **Update** button. Press that and it downloads the new version, checks that the file
-is exactly what was published, closes, replaces itself and opens again. On Windows the program
-folder is refilled where it is, so a shortcut or a taskbar pin keeps working. On Linux the new
-AppImage takes the old file's place under the old file's name, so a menu entry or a shortcut keeps
-working; the name can therefore go out of date, and About always shows the real version. It never checks on its own; see [The menu](#check-for-updates).
+is exactly what was published, closes, replaces itself and opens again. Nothing moves, so a
+shortcut, a taskbar pin or a menu entry keeps working: on Windows the `OmegaPlugin` folder is refilled
+where it is, and on Linux the new AppImage takes the old file's place. Neither name has a version in
+it, so neither goes out of date; About shows which version you have. It never checks on its own; see [The menu](#check-for-updates).
 
 You can still do it by hand: download from the Releases page, and on Windows extract the new zip
-over the old folder, on Linux make the new AppImage executable and delete the old file. Either way
+over the `OmegaPlugin` folder, on Linux replace the old file with the new one and make it executable.
+Coming from a version before 2.0.0, whose names carried the version, install it once by hand and
+delete the old file or folder; your shortcuts need making again that one time. Either way
 nothing you made is lost: your settings and presets live in a folder of their own, outside the
 program, and so do your recordings. See [Where your files live](#where-your-files-live).
 
@@ -945,7 +947,7 @@ line leaves `report.txt` empty, because PowerShell does not wait for a program w
 **Linux.** From a terminal in the folder holding the AppImage:
 
 ```
-./Omega-Plugin-*-Linux.AppImage --list-backends
+./Omega-Plugin-Linux.AppImage --list-backends
 ```
 
 It prints directly.

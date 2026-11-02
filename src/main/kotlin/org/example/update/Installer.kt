@@ -92,11 +92,10 @@ object UnreadablePathInstaller : Installer {
  *    all pass it. This is the only test that matters and it costs one JVM start, so it happens while
  *    the old copy is untouched, and a failure ends with nothing changed but the download deleted.
  * 2. **It is renamed over the running image.** Atomic, so the path always holds a whole program, and
- *    safe, because the kernel keeps the old inode until the process exits. The same path rather than
- *    the release's versioned name because everything that points at the program points at the path:
- *    a menu entry, an AppImageLauncher integration, a symlink, a file the user renamed. A new name
- *    breaks all of them. The cost is a file called `…-1.8.1-…` holding a later version; About says
- *    which it really is. Windows made the same choice, for the same reason.
+ *    safe, because the kernel keeps the old inode until the process exits. The same path whatever
+ *    it is called, because everything that points at the program points at the path: a menu entry,
+ *    an AppImageLauncher integration, a symlink, a file the user renamed. The release's name has no
+ *    version in it, so that path never goes out of date.
  *
  * The step left for the window starts the image at that path.
  *
@@ -224,9 +223,9 @@ class AppImageInstaller(
  * While the program runs its launcher and the runtime's DLLs are locked, so nothing in-process can
  * replace them. Everything that *can* be done in-process is: the zip is expanded here, by
  * `java.util.zip`, so the helper is plain `cmd` with no PowerShell in it — wait, copy, start, clean
- * up. It copies **into the installed folder**, not beside it: extracting a new `OmegaPlugin-1.8.1\`
- * next to the old one is how the README said to do it by hand, and it moves the exe and breaks
- * every shortcut and taskbar pin the user made.
+ * up. It copies **into the installed folder**, not beside it: the exe keeps its path, so every
+ * shortcut and taskbar pin the user made keeps working, and the folder's name has no version in it
+ * to go out of date.
  *
  * The installed folder is the launcher's, from `jpackage.app-path`, which the jpackage launcher
  * sets and nothing else does. Writability is proved by writing: a folder under `Program Files`

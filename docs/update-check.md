@@ -25,6 +25,8 @@ build departed from the text below:
   image would not start, and broke every path pointing at the old one. The new image is now run
   with `--version` first and then renamed over the running image. See "Check for updates" in
   CLAUDE.md, which overrides §4.2.
+- **The names lost their version in 2.0.0.** The AppImage is `Omega-Plugin-Linux.AppImage` and the
+  Windows folder `OmegaPlugin`, so the paths in §4 that carry a version are history too.
 
 The idea in one paragraph. The About dialog gets a **Check for updates** button. Pressing it asks
 GitHub for the newest published release and says either "you have the newest version" or shows

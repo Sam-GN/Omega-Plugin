@@ -27,10 +27,10 @@ From the [Releases page](https://github.com/Sam-GN/Omega-Plugin/releases):
 double-click `OmegaPlugin.exe`. Keep the folder together: the `.exe`, `app\` and `runtime\` are one
 unit. A `READ-ME-FIRST.txt` in the folder repeats this and the troubleshooting steps below.
 
-**Linux** — download `Omega-Plugin-<version>-Linux.AppImage`, make it executable and run it:
+**Linux** — download `Omega-Plugin-Linux.AppImage`, make it executable and run it:
 
-    chmod +x Omega-Plugin-*-Linux.AppImage
-    ./Omega-Plugin-*-Linux.AppImage
+    chmod +x Omega-Plugin-Linux.AppImage
+    ./Omega-Plugin-Linux.AppImage
 
 One file for every distribution — Arch, Manjaro, Debian, Ubuntu, Mint, Fedora, and the immutable
 ones such as SteamOS and Bazzite. It works with whatever sound system the machine has. For the lowest
@@ -44,11 +44,13 @@ interfere.
 
 **Updating.** **☰ → About → Check for updates** asks GitHub for the newest release and, if there is
 one, shows its notes and an **Update** button that downloads it, checks it and replaces the
-installed program in place. Either way shortcuts keep working: the Windows folder is refilled, and
-the new AppImage is tested and then takes the old file's exact path, so its filename may name an
-older version than the one inside. About always shows the real one. The first version that can be updated *into* is the one after 1.8.0-beta. By hand it
-still works the old way: on Windows unzip the new version over the old folder; on Linux download the
-new AppImage, `chmod +x` it and delete the old file. Nothing is lost either way: settings and presets
+installed program in place. Nothing moves, so shortcuts and menu entries keep working: the
+`OmegaPlugin` folder on Windows is refilled, and on Linux the new `Omega-Plugin-Linux.AppImage` is
+tested and then takes the old file's place. Neither name has a version in it, so neither goes out
+of date; About shows which version you have. By hand it is as simple: on Windows unzip the new
+version over the `OmegaPlugin` folder; on Linux replace the file with the new one and `chmod +x` it.
+Coming from before 2.0.0, install it once by hand and delete the old versioned file or folder.
+Nothing is lost either way: settings and presets
 live in `%APPDATA%\omega-plugin` on Windows and `~/.config/omega-plugin` on Linux, and recordings in
 an `Omega-Plugin` folder on the Desktop or in the home folder, all outside the program itself.
 
@@ -142,7 +144,7 @@ The output is redirected to a file because `OmegaPlugin.exe` is a windowed progr
 to the console on its own. When reporting a bug, attach `report.txt`.
 
 On Linux, run the same commands on the AppImage from a terminal, for example
-`./Omega-Plugin-*-Linux.AppImage --list-backends`. They print directly. The last line says whether
+`./Omega-Plugin-Linux.AppImage --list-backends`. They print directly. The last line says whether
 the audio thread can get realtime priority. If it cannot, it names the fix for your distribution,
 which is usually joining the `realtime` or `audio` group and logging back in. Without realtime
 priority, the sound crackles under load.

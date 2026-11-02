@@ -165,17 +165,12 @@ exe again if it still can and shows the zip in Explorer. A half-copied folder is
 
 ---
 
-## 8. After an update on Linux the AppImage's filename can name an older version
+## 8. An update proves the new AppImage runs, not that its window opens
 
 **Affects:** 1.9.1-beta onward, Linux, the Update button.
-**Status:** **by design.** About always shows the real version.
+**Status:** **known limit.**
 
-The new image takes the running image's exact path, so a file called
-`Omega-Plugin-1.9.0-beta-Linux.AppImage` can hold a later version. Giving it the release's name is what
-1.8.0 did, and it broke every menu entry, AppImageLauncher integration and symlink pointing at the
-old path, which is a worse fault than a stale name. Renaming the file by hand is safe.
-
-Also known: `AppImageInstaller` proves a new image runs by asking it for `--version`, which covers
+`AppImageInstaller` proves a new image runs by asking it for `--version`, which covers
 the image, its runtime, the JVM and the jar, and not the window. An image that passes and then
 fails while opening its window has already replaced the old one. Everything the swap does was run on
 one Manjaro laptop under X11 (Xvfb) with a dummy JACK server, in folders with spaces, through a

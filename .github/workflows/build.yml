@@ -82,7 +82,7 @@ jobs:
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/appimagetool"
           ./gradlew appImage -Pappimagetool="$RUNNER_TEMP/appimagetool" --stacktrace
-          image=$(ls build/distributions/Omega-Plugin-*-Linux.AppImage)
+          image=build/distributions/Omega-Plugin-Linux.AppImage
           APPIMAGE_EXTRACT_AND_RUN=1 "$image" --list-backends | tee report.txt
           grep -q "Collector: generational ZGC. Good." report.txt
           # The updater depends on --version; see release.yml.
@@ -97,7 +97,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: appimage
-          path: build/distributions/Omega-Plugin-*-Linux.AppImage
+          path: build/distributions/Omega-Plugin-Linux.AppImage
           retention-days: 14
 
       - name: Upload test results

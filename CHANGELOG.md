@@ -9,6 +9,43 @@ unverified, it says so.
 
 ---
 
+## [2.0.1-beta] — 2026-11-01
+
+### Fixed — release notes read as text in the update dialog
+
+The notes under **Check for updates** showed the changelog's raw marks, stars and backticks, and
+broke sentences in the middle because the changelog wraps at 100 columns and the box is about half
+that. They now read as paragraphs and bullets, with the marks gone and anything quoted as code left
+exactly as written. All of a release's notes are there to scroll through, and the box no longer ends
+on half a line.
+
+---
+
+## [2.0.0-beta] — 2026-11-01
+
+### Changed — the program's names no longer carry its version
+
+Updating now changes the program and nothing else. No path moves, so every shortcut, taskbar pin and
+menu entry keeps working, and nothing left on disk can name the wrong version.
+
+- **Linux:** the file is `Omega-Plugin-Linux.AppImage`. It used to carry the version, which left two
+  bad choices after an update: a new name that broke whatever pointed at the old one, or the old name
+  on a newer program.
+- **Windows:** the folder inside the zip is `OmegaPlugin`, and `OmegaPlugin.exe` stays where it is
+  when an update refills it. The zip keeps the version in its own name, so a download says what it
+  is; it is thrown away once extracted.
+- **Inside both:** the jar is `OmegaPlugin.jar`, so unzipping a new version over an old folder by
+  hand replaces it rather than leaving the old one beside it.
+
+About shows which version you have, as do `--version` and, on Windows, the exe's Properties.
+
+**Coming from an earlier version:** install 2.0.0 by hand once, delete the old versioned file or
+folder, and make your shortcuts again. On Linux under AppImageLauncher, remove the old copy with
+**Delete this AppImage** on its menu entry first. Your settings, presets and recordings live outside
+the program and are not touched. Every update after that is the Update button.
+
+---
+
 ## [1.9.3-beta] — 2026-11-01
 
 ### Fixed — About could fail to open, and say nothing
