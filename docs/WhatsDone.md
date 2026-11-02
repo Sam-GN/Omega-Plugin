@@ -251,6 +251,8 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **The tuner, lighter and sturdier, 2.1.4-beta.** The same readings for about a seventh of the
+  processor, and a driver changing its rate can no longer stop it.
 - **A tuner, 2.1.0-beta.** On the rhythm row: the string heard, a lamp each way for flat and sharp,
   dimming as it closes in, the letter green when in tune. Listens to the dry input off the audio
   thread; pauses the metronome and the loops while on. From 2.1.1 it hears down to 28 Hz and names

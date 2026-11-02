@@ -9,6 +9,28 @@ unverified, it says so.
 
 ---
 
+## [2.1.4-beta] — 2026-11-02
+
+### Fixed — the tuner could stop working after the driver changed its sample rate
+
+A driver that changes its own format while the stream runs — the rate set in an ASIO driver's
+panel, or a JACK server changing its rate — resized the tuner while it was reading, and the reading
+failed. The tuner then showed TUNE and nothing else until it was switched off and on. A reading now
+finishes on the sizes it started with, and a reading that fails is one missed reading, not the end
+of the tuner.
+
+### Fixed — "Tuner on" stayed on the status line after the tuner was off
+
+Switching the tuner off now says so.
+
+### Changed — the tuner uses about a seventh of the processor it did
+
+Finding the note now starts with a search on a lighter copy of the signal, then measures the answer
+exactly as before. Every reading is the same as 2.1.3's, from a five-string bass's low B to the high
+E, and noise and hum are still turned away; a reading takes about 1.2 ms instead of 8.5.
+
+---
+
 ## [2.1.3-beta] — 2026-11-02
 
 ### Changed — the tuner's lamps point at the note

@@ -113,4 +113,37 @@ class TunerTest {
         assertEquals(false, tuner.enabled)
         assertNull(tuner.read())
     }
+
+    @Test
+    fun `a rate change while a reading is under way never breaks the reading`() {
+        // A driver changing its own format re-prepares the tuner while the strip's thread may be
+        // reading; before 2.1.4 a change of rate mid-read threw out of bounds and ended that thread.
+        val tuner = Tuner()
+        tuner.prepare(48_000f)
+        tuner.enabled = true
+        val block = FloatArray(256) { kotlin.math.sin(it * 0.05f) }
+        repeat(200) { tuner.feed(block, block.size) }
+        val failures = java.util.concurrent.atomic.AtomicInteger()
+        val running = java.util.concurrent.atomic.AtomicBoolean(true)
+        val reader = Thread {
+            while (running.get()) {
+                try { tuner.read() } catch (e: Throwable) { failures.incrementAndGet() }
+            }
+        }
+        reader.start()
+        // Just over a window after each change, so the reader always has something to read and the
+        // changes come as often as possible: against the old code this throws within the time.
+        val until = System.currentTimeMillis() + 3_000
+        var changes = 0
+        while (System.currentTimeMillis() < until) {
+            tuner.prepare(if (changes % 2 == 0) 96_000f else 44_100f)
+            repeat(70) { tuner.feed(block, block.size) }
+            changes++
+            Thread.sleep(1)
+        }
+        running.set(false)
+        reader.join()
+        kotlin.test.assertTrue(changes > 200, "enough rate changes to mean something: $changes")
+        kotlin.test.assertEquals(0, failures.get(), "readings that threw across $changes rate changes")
+    }
 }

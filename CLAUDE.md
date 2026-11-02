@@ -568,13 +568,26 @@ the TUNE button, a `<` lamp, both pointing at the button. Added in 2.1.0. The ru
   loop box's through-lanes and the boards, and that is a 64-float copy into a ring plus one volatile
   store, and nothing when the switch is off. The pitch is read by `Tuner.read` on `TunerStrip`'s own
   thread, twenty times a second: it takes the newest window out of the ring and hands it to
-  `PitchTracker`, a normalised autocorrelation over about 180 ms with parabolic refinement, which is
-  a few million multiplications and must never run on the audio thread or the event thread. Since
-  2.1.1 the search runs on the input averaged down to about 24 kHz (`factor`), because the floor is
-  28 Hz for a five-string bass and the lag search grows with the rate squared; the lag found is then
-  refined at the full rate over the few lags it could stand for, which is what keeps the high E
-  inside a cent. The ring is four windows long and the reader can never fall three behind during
-  one copy. The engine's allocation test runs with the tuner on.
+  `PitchTracker`, a normalised autocorrelation over about 180 ms with parabolic refinement, which
+  must never run on the audio thread or the event thread. It works at three rates. The sweep over
+  every lag from 360 Hz down to 28 Hz runs at about 8 kHz (`coarseFactor`, `COARSE_HZ`), because
+  that sweep is nearly all the cost and grows with the rate squared — a five-string bass's B is
+  still five periods of about 260 samples there (2.1.4; it ran at the analysis rate before, about
+  8.5 ms a reading against 1.2 now). **The gate is not measured there**: averaging smooths the
+  signal, and gated on the coarse correlation, mains hum under noise read as G at 96 kHz. The lag
+  found and the coarse best are each refined at the analysis rate (`factor`, about 24-32 kHz), where
+  `CLARITY_MIN` and `PEAK_SHARE` are applied exactly as they were; then the lag is refined at the
+  full rate, which keeps the high E inside a cent. Any change here is checked against the previous
+  version reading for reading, not only against the tests. The ring is four windows long and the
+  reader can never fall three behind during one copy. The engine's allocation test runs with the
+  tuner on.
+- **One state per rate, swapped whole.** `Tuner.prepare` builds a new `State` — tracker, window,
+  ring and write count together — and publishes it through one volatile reference, because a
+  driver's format change re-prepares while the stream runs and the strip may be mid-read: before
+  2.1.4 a rate change then threw out of bounds and ended the strip's thread. A read takes one state
+  and finishes on it, and reads are synchronized among themselves (never with the callback), since
+  an old strip thread can overlap a new one for a moment. `TunerStrip.listen` catches a failed
+  reading and carries on. `TunerTest` races reads against rate changes and fails on the old code.
 - **The dry input, not the output.** An overdrive's harmonics and a reverb's tail are what make a
   pitch hard to read; the guitar alone is easy. Nothing in the chain changes while it listens, and
   the sound carries on.
@@ -593,7 +606,8 @@ the TUNE button, a `<` lamp, both pointing at the button. Added in 2.1.0. The ru
   sees the thing running — or the stream stopped under it, which stops the transport anyway. It is
   refused while a take or a lane records, with the status line saying so; off is always allowed.
   Esc turns it off from anywhere, through a `KeyEventDispatcher` like the loop board's, never while
-  typing in a field.
+  typing in a field. Switched off by the player, the status line says "Tuner off."; switched off by
+  the stream stopping, the stop's own line stands.
 - **The display is the strip's business.** `TunerStrip.tick`, from the meter timer: the letter,
   the left `>` lit for flat and the right `<` for sharp — each points the string at the note; they
   faced outwards with sharp on the left until 2.1.3, which read as pushing away — always in
@@ -937,7 +951,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-509 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+510 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

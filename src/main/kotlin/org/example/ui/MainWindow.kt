@@ -1149,6 +1149,8 @@ class MainWindow : JFrame("Omega-Plugin") {
         } else {
             engine.tuner.enabled = false
             tunerStrip.setOn(false)
+            // Only when the player switched it off: a stream stopping under it says "Stopped." itself.
+            if (resume) setStatus("Tuner off.", Theme.TEXT_DIM)
             if (resume && engine.isRunning) {
                 if (resumeRhythm && !rhythm.isRunning) {
                     rhythm.start()

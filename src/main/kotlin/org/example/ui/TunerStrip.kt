@@ -107,12 +107,22 @@ class TunerStrip(private val tuner: Tuner, onToggle: () -> Unit) : JPanel(FlowLa
     }
 
     private fun listen() {
+        var reported = false
         try {
             while (on) {
-                val reading = tuner.read()
-                if (reading != null) {
-                    latest = reading
-                    heardAt = System.nanoTime()
+                // A reading that fails is one missed reading, not the end of the tuner: before
+                // 2.1.4 anything thrown here ended this thread, and the strip showed TUNE for good.
+                try {
+                    val reading = tuner.read()
+                    if (reading != null) {
+                        latest = reading
+                        heardAt = System.nanoTime()
+                    }
+                } catch (e: Exception) {
+                    if (!reported) {
+                        reported = true
+                        org.example.util.Log.error("tuner", "A reading failed; the tuner carries on.", e)
+                    }
                 }
                 Thread.sleep(PERIOD_MILLIS)
             }

@@ -40,46 +40,52 @@ class Tuner {
     @Volatile
     var enabled: Boolean = false
 
-    var sampleRate: Float = DEFAULT_SAMPLE_RATE
-        private set
+    /**
+     * Everything one sample rate needs, made together and replaced together (2.1.4). `prepare` runs
+     * on the opening thread, and on a driver's own format change while the stream runs, and a read
+     * on the strip's thread could be half-way through the old sizes when the new ones arrived: a
+     * rate change mid-read threw out of bounds and the strip's thread died with it. A read now takes
+     * one state and finishes on it, whatever replaces it meanwhile.
+     */
+    private class State(rate: Float) {
+        val tracker = PitchTracker(rate)
+        val window = FloatArray(tracker.windowSize)
+        val ring: FloatArray
 
-    private val tracker = PitchTracker()
+        /** Samples ever written. Read as a whole by [read]; the ring's size is a power of two, so the index is a mask. */
+        @Volatile
+        var written = 0L
 
-    @Volatile
-    private var ring = FloatArray(0)
-
-    /** Samples ever written. Read as a whole by [read]; the ring's size is a power of two, so the index is a mask. */
-    @Volatile
-    private var written = 0L
-
-    private var window = FloatArray(0)
-    private var previous: GuitarString? = null
-
-    init {
-        prepare(DEFAULT_SAMPLE_RATE)
+        init {
+            var size = 1
+            while (size < window.size * RING_WINDOWS) size = size shl 1
+            ring = FloatArray(size)
+        }
     }
+
+    @Volatile
+    private var state = State(DEFAULT_SAMPLE_RATE)
+
+    val sampleRate: Float get() = state.tracker.sampleRate
+
+    @Volatile
+    private var previous: GuitarString? = null
 
     /** On the opening thread, with the rate the device granted. Sizes everything; the audio thread allocates nothing. */
     fun prepare(rate: Float) {
-        sampleRate = rate
-        tracker.prepare(rate)
-        val needed = tracker.windowSize
-        var size = 1
-        while (size < needed * RING_WINDOWS) size = size shl 1
-        window = FloatArray(needed)
+        state = State(rate)
         previous = null
-        written = 0L
-        ring = FloatArray(size)
     }
 
     /** The audio thread: [frames] of the dry input into the ring. Nothing else happens here. */
     fun feed(input: FloatArray, frames: Int) {
         if (!enabled) return
-        val r = ring
+        val s = state
+        val r = s.ring
         val mask = r.size - 1
-        val start = (written and mask.toLong()).toInt()
+        val start = (s.written and mask.toLong()).toInt()
         for (i in 0 until frames) r[(start + i) and mask] = input[i]
-        written += frames
+        s.written += frames
     }
 
     /** What the string is doing right now. */
@@ -97,23 +103,28 @@ class Tuner {
      * window has arrived or nothing clear is sounding, which also forgets the string last heard, so
      * the next note is named by what it is nearest to rather than by what came before it.
      */
+    @Synchronized
     fun read(): Reading? {
-        val r = ring
-        val w = window
+        // Synchronized among readers, which are never the audio thread: two strip threads can
+        // overlap for a moment when the tuner is switched off and on again, and they share the
+        // window and the tracker's arrays.
+        val s = state
+        val r = s.ring
+        val w = s.window
         val n = w.size
-        val end = written
+        val end = s.written
         if (end < n || r.size < n) return null
         val mask = r.size - 1
         val start = end - n
         for (i in 0 until n) w[i] = r[((start + i) and mask.toLong()).toInt()]
-        val hz = tracker.estimate(w, n)
+        val hz = s.tracker.estimate(w, n)
         if (hz <= 0f) {
             previous = null
             return null
         }
         val string = GuitarString.choose(hz, previous)
         previous = string
-        return Reading(string, string.cents(hz), tracker.lastClarity, hz)
+        return Reading(string, string.cents(hz), s.tracker.lastClarity, hz)
     }
 
     /**
@@ -127,7 +138,7 @@ class Tuner {
             repeat(blocks) { feed(input, frames) }
         } finally {
             enabled = was
-            written = 0L
+            state.written = 0L
             previous = null
         }
     }

@@ -104,9 +104,15 @@ class PitchTracker(sampleRate: Float = DEFAULT_SAMPLE_RATE) {
 
     private var minLag = 0
     private var maxLag = 0
-    private var correlation = FloatArray(0)
     private var reduced = FloatArray(0)
     private var full = FloatArray(0)
+
+    /** The search's own rate is the analysis rate divided by this: about [COARSE_HZ]. */
+    private var coarseFactor = 1
+    private var coarseMinLag = 0
+    private var coarseMaxLag = 0
+    private var coarse = FloatArray(0)
+    private var coarseCorrelation = FloatArray(0)
 
     /** How clear the last estimate was, 0..1: the correlation at the period it chose. */
     var lastClarity: Float = 0f
@@ -125,9 +131,13 @@ class PitchTracker(sampleRate: Float = DEFAULT_SAMPLE_RATE) {
         val analysisRate = rate / factor
         minLag = (analysisRate / MAX_HZ).toInt().coerceAtLeast(2)
         maxLag = (analysisRate / MIN_HZ).toInt() + 1
-        correlation = FloatArray(maxLag + 2)
         reduced = FloatArray(maxLag * WINDOW_PERIODS)
         full = FloatArray(windowSize)
+        coarseFactor = (analysisRate / COARSE_HZ).toInt().coerceAtLeast(1)
+        coarseMinLag = (minLag / coarseFactor).coerceAtLeast(2)
+        coarseMaxLag = maxLag / coarseFactor + 1
+        coarse = FloatArray(reduced.size / coarseFactor)
+        coarseCorrelation = FloatArray(coarseMaxLag + 2)
     }
 
     /**
@@ -163,27 +173,54 @@ class PitchTracker(sampleRate: Float = DEFAULT_SAMPLE_RATE) {
             y[i] = acc / f
         }
 
-        val r = correlation
+        // The search, at about COARSE_HZ: every lag from the highest note to the lowest is tried
+        // here, and that sweep is nearly all the work, so it runs on a quarter of the samples and a
+        // quarter of the lags (2.1.4). The lowest note, a five-string bass's B, is still five
+        // periods of about 260 samples; the highest is still 22 samples a period.
+        val z = coarse
+        val cf = coarseFactor
+        val mc = m / cf
+        for (i in 0 until mc) {
+            var acc = 0f
+            val base = i * cf
+            for (k in 0 until cf) acc += y[base + k]
+            z[i] = acc / cf
+        }
+        val rc = coarseCorrelation
         var best = 0f
-        for (lag in minLag..maxLag) {
-            r[lag] = correlate(y, m, lag)
-            if (r[lag] > best) best = r[lag]
+        var bestLag = -1
+        for (lag in coarseMinLag..coarseMaxLag) {
+            rc[lag] = correlate(z, mc, lag)
+            if (rc[lag] > best) {
+                best = rc[lag]
+                bestLag = lag
+            }
         }
         if (best < CLARITY_MIN) return 0f
 
         // The first local maximum that comes within PEAK_SHARE of the best: the fundamental's own
         // peak, not the equally tall one at twice its period.
         val threshold = best * PEAK_SHARE
-        var coarse = -1
-        for (candidate in (minLag + 1) until maxLag) {
-            val v = r[candidate]
-            if (v >= threshold && v >= r[candidate - 1] && v >= r[candidate + 1]) {
-                coarse = candidate
+        var found = -1
+        for (candidate in (coarseMinLag + 1) until coarseMaxLag) {
+            val v = rc[candidate]
+            if (v >= threshold && v >= rc[candidate - 1] && v >= rc[candidate + 1]) {
+                found = candidate
                 break
             }
         }
+        if (found < 0) return 0f
+
+        // Back at the analysis rate, only over the lags each coarse one could stand for. The gate
+        // is measured here, at the resolution it always was: the best correlation must reach
+        // CLARITY_MIN and the one taken must be within PEAK_SHARE of it. The coarse signal is
+        // averaged and so smoother than the input; gated there, mains hum under noise read as a
+        // note at 96 kHz, which it never did before the search moved.
+        val (coarse, clarity) = refine(y, m, found, cf)
         if (coarse < 0) return 0f
-        lastClarity = r[coarse]
+        val strongest = if (bestLag == found) clarity else refine(y, m, bestLag, cf).second
+        if (maxOf(strongest, clarity) < CLARITY_MIN || clarity < CLARITY_MIN * PEAK_SHARE) return 0f
+        lastClarity = clarity
 
         // Refined at the full rate: the best of the full-rate lags the coarse one could stand for,
         // then a parabola through it and its neighbours.
@@ -203,6 +240,20 @@ class PitchTracker(sampleRate: Float = DEFAULT_SAMPLE_RATE) {
         val denominator = left - 2f * peak + right
         val delta = if (denominator != 0f) (left - right) / (2f * denominator) else 0f
         return sampleRate / (lag + delta.coerceIn(-0.5f, 0.5f))
+    }
+
+    /** The best analysis-rate lag that coarse lag [at] could stand for, and its correlation. */
+    private fun refine(y: FloatArray, m: Int, at: Int, cf: Int): Pair<Int, Float> {
+        var lag = -1
+        var value = -2f
+        for (candidate in (at * cf - cf).coerceAtLeast(minLag)..(at * cf + cf).coerceAtMost(maxLag)) {
+            val v = correlate(y, m, candidate)
+            if (v > value) {
+                value = v
+                lag = candidate
+            }
+        }
+        return lag to value
     }
 
     /** Normalised autocorrelation of the first [n] samples of [x] at [lag]. */
@@ -236,6 +287,13 @@ class PitchTracker(sampleRate: Float = DEFAULT_SAMPLE_RATE) {
 
         /** -50 dBFS. Pickup hum sits well below this; a plucked string well above it. */
         const val GATE_RMS = 0.00316f
+
+        /**
+         * The rate of the full search. Low enough to make the sweep cheap, high enough that the
+         * highest note is still 22 samples a period; the answer is then refined at the analysis
+         * rate and at the full rate, so the cents do not depend on it.
+         */
+        const val COARSE_HZ = 8_000f
 
         /** A correlation below this at every lag is noise, or two notes at once. */
         const val CLARITY_MIN = 0.8f
