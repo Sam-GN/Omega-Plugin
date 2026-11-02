@@ -44,8 +44,9 @@ interfere.
 
 **Updating.** **☰ → About → Check for updates** asks GitHub for the newest release and, if there is
 one, shows its notes and an **Update** button that downloads it, checks it and replaces the
-installed program in place — the AppImage swaps itself, the Windows folder is refilled so shortcuts
-keep working. The first version that can be updated *into* is the one after 1.8.0-beta. By hand it
+installed program in place. Either way shortcuts keep working: the Windows folder is refilled, and
+the new AppImage is tested and then takes the old file's exact path, so its filename may name an
+older version than the one inside. About always shows the real one. The first version that can be updated *into* is the one after 1.8.0-beta. By hand it
 still works the old way: on Windows unzip the new version over the old folder; on Linux download the
 new AppImage, `chmod +x` it and delete the old file. Nothing is lost either way: settings and presets
 live in `%APPDATA%\omega-plugin` on Windows and `~/.config/omega-plugin` on Linux, and recordings in

@@ -27,6 +27,7 @@ import kotlin.io.path.readText
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -49,34 +50,36 @@ class InstallerTest {
 
     @Test
     fun `appimage - not run from an image cannot apply but still has somewhere to download to`() {
-        val installer = AppImageInstaller(image = null) { error("must not launch") }
+        val installer = AppImageInstaller(image = null, probe = { null }) { error("must not launch") }
         assertEquals(Installer.NOT_FROM_BUNDLE, installer.cannotApply())
         assertTrue(Files.isDirectory(installer.downloadFolder()))
     }
 
+    /** An installed image and a staged download beside it, the shape [Updater] leaves. */
+    private fun images(folder: Path): Pair<Path, Path> {
+        val installed = folder.resolve("Omega-Plugin-1.8.0-beta-Linux.AppImage").also { Files.writeString(it, "old") }
+        val staged = folder.resolve(".Omega-Plugin-1.8.1-beta-Linux.AppImage.new").also { Files.writeString(it, "new") }
+        return installed to staged
+    }
+
     @Test
-    fun `appimage - the swap launches the new image and then deletes the old`() {
+    fun `appimage - the new image takes the running image's path and starts from it`() {
         val folder = tempDir()
         try {
-            val old = folder.resolve("Omega-Plugin-1.8.0-beta-Linux.AppImage").also { Files.writeString(it, "old") }
-            val fresh = folder.resolve("Omega-Plugin-1.8.1-beta-Linux.AppImage").also { Files.writeString(it, "new") }
+            val (installed, staged) = images(folder)
             val launched = mutableListOf<Path>()
-            val installer = AppImageInstaller(old) { image ->
-                launched.add(image)
-                // The old image must still be there while the new one starts.
-                assertTrue(Files.exists(old), "old image kept until the new one is running")
-            }
+            val installer = AppImageInstaller(installed, { null }) { launched.add(it) }
             assertNull(installer.cannotApply())
-            assertEquals(folder, installer.downloadFolder())
+            assertEquals(folder.toRealPath(), installer.downloadFolder())
             val progress = mutableListOf<String>()
-            val finish = installer.stage(fresh) { progress += it }
-            // Staging alone changes nothing on disk but the permission bit.
-            assertTrue(Files.exists(old))
+            val finish = installer.stage(staged) { progress += it }
+            // Everything that can fail has happened by now; only the restart is left.
             assertTrue(launched.isEmpty())
+            assertEquals("new", Files.readString(installed))
+            assertFalse(Files.exists(staged))
             finish()
-            assertEquals(listOf(fresh.toAbsolutePath()), launched)
-            assertFalse(Files.exists(old), "old image deleted after the launch")
-            assertTrue(Files.exists(fresh))
+            assertEquals(listOf(installed.toRealPath()), launched)
+            assertEquals(1, Files.list(folder).use { it.count() }, "one program in the folder")
             assertTrue(progress.isNotEmpty())
         } finally {
             deleteTree(folder)
@@ -84,22 +87,85 @@ class InstallerTest {
     }
 
     @Test
-    fun `appimage - a download with the old image's exact name is not deleted`() {
+    fun `appimage - the new image is run before the old one is touched`() {
         val folder = tempDir()
         try {
-            val image = folder.resolve("omega.AppImage").also { Files.writeString(it, "same file") }
-            val installer = AppImageInstaller(image) { }
-            installer.stage(image) { }()
-            assertTrue(Files.exists(image))
+            val (installed, staged) = images(folder)
+            var probed: Path? = null
+            val installer = AppImageInstaller(installed, { image ->
+                probed = image
+                assertEquals("old", Files.readString(installed), "old image intact during the test")
+                assertTrue(Files.isExecutable(image), "marked executable before it is run")
+                null
+            }) { }
+            installer.stage(staged) { }
+            assertEquals(staged.toAbsolutePath(), probed)
         } finally {
             deleteTree(folder)
         }
     }
 
     @Test
-    fun `appimage - the child's environment loses the runtime's variables and nothing else`() {
+    fun `appimage - an image that will not run changes nothing and starts nothing`() {
+        val folder = tempDir()
+        try {
+            val (installed, staged) = images(folder)
+            val installer = AppImageInstaller(installed, { "it exited with code 127" }) { error("must not launch") }
+            val failure = assertFailsWith<UpdateException> { installer.stage(staged) { } }
+            assertContains(failure.message!!, AppImageInstaller.WOULD_NOT_START)
+            assertContains(failure.message!!, "127")
+            assertEquals("old", Files.readString(installed))
+            assertFalse(Files.exists(staged), "the download is deleted")
+        } finally {
+            deleteTree(folder)
+        }
+    }
+
+    @Test
+    fun `appimage - a renamed image keeps the name the user gave it`() {
+        val folder = tempDir()
+        try {
+            val installed = folder.resolve("omega.AppImage").also { Files.writeString(it, "old") }
+            val staged = folder.resolve(".download.new").also { Files.writeString(it, "new") }
+            AppImageInstaller(installed, { null }) { }.stage(staged) { }()
+            assertEquals("new", Files.readString(installed))
+        } finally {
+            deleteTree(folder)
+        }
+    }
+
+    @Test
+    fun `appimage - started through a symlink, the file is replaced and the link survives`() {
+        val folder = tempDir()
+        try {
+            val apps = Files.createDirectory(folder.resolve("apps"))
+            val bin = Files.createDirectory(folder.resolve("bin"))
+            val (real, staged) = images(apps)
+            val link = Files.createSymbolicLink(bin.resolve("omega"), real)
+            val installer = AppImageInstaller(link, { null }) { }
+            assertEquals(apps.toRealPath(), installer.downloadFolder(), "the file's folder, for a same-disk rename")
+            installer.stage(staged) { }()
+            assertTrue(Files.isSymbolicLink(link))
+            assertEquals("new", Files.readString(link))
+        } finally {
+            deleteTree(folder)
+        }
+    }
+
+    @Test
+    fun `appimage - the staged name is not an AppImage to anything watching the folder`() {
+        val name = AppImageInstaller(null, { null }) { }.stagedName("Omega-Plugin-1.8.1-beta-Linux.AppImage")
+        assertTrue(name.startsWith("."))
+        assertFalse(name.endsWith(".AppImage"))
+    }
+
+    @Test
+    fun `appimage - the child loses the runtime's variables and is kept from AppImageLauncher`() {
         val env = mapOf("APPIMAGE" to "/x/a.AppImage", "APPDIR" to "/tmp/.mount_x", "OWD" to "/x", "ARGV0" to "a", "HOME" to "/home/u", "PATH" to "/bin")
-        assertEquals(mapOf("HOME" to "/home/u", "PATH" to "/bin"), AppImageInstaller.childEnvironment(env))
+        assertEquals(
+            mapOf("HOME" to "/home/u", "PATH" to "/bin", "APPIMAGELAUNCHER_DISABLE" to "1"),
+            AppImageInstaller.childEnvironment(env),
+        )
     }
 
     // ---------------------------------------------------------------- Windows

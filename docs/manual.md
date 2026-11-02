@@ -108,7 +108,8 @@ newest release, once, and tells you either that you have it or that a newer one 
 notes and an **Update** button. Press that and it downloads the new version, checks that the file
 is exactly what was published, closes, replaces itself and opens again. On Windows the program
 folder is refilled where it is, so a shortcut or a taskbar pin keeps working. On Linux the new
-AppImage replaces the old file. It never checks on its own; see [The menu](#check-for-updates).
+AppImage takes the old file's place under the old file's name, so a menu entry or a shortcut keeps
+working; the name can therefore go out of date, and About always shows the real version. It never checks on its own; see [The menu](#check-for-updates).
 
 You can still do it by hand: download from the Releases page, and on Windows extract the new zip
 over the old folder, on Linux make the new AppImage executable and delete the old file. Either way
@@ -781,14 +782,14 @@ under **☰ → About**, and it says so right under the first of them.
 - **Update** downloads the new version from github.com, with the file's name and size stated on
   the line beside it, checks the download against the checksum published with the release, and
   replaces the program. If sound is running it asks first, because updating closes the program.
-  The line shows the download's progress, then "Checking…", on Windows "Unpacking…", then
-  "Restarting…", and the window closes. Closing is the same as **Exit**: a running take is
+  The line shows the download's progress, then "Checking…", then "Unpacking…" on Windows or
+  "Testing the new version…" on Linux, then "Restarting…", and the window closes. Closing is the same as **Exit**: a running take is
   finished and the session is saved, but loop lanes you have not saved are gone, so press SAVE on
   them first. A moment later the new version opens with your session, settings and presets as they
-  were. On Windows the folder you extracted is refilled in place; on Linux the new AppImage is put
-  beside the old one and the old one is deleted. The Linux swap is new in 1.8.0 and has had less
-  testing than the Windows one: if the program does not come back, the new AppImage is in the
-  folder the old one was in, ready to run by hand, and a report is welcome.
+  were. On Windows the folder you extracted is refilled in place; on Linux the new AppImage is first
+  run once to prove it starts on your machine, then replaces the old file under the old file's name.
+  If it does not start, the line says so, the download is deleted and the version you have carries
+  on as if nothing had happened.
 - **When it cannot replace itself**, the button reads **Download** instead and the line says why:
   the program is in a folder it is not allowed to write to, such as `Program Files`, or it was not
   installed from a release bundle. The checked download goes to your Downloads folder, and you
@@ -952,6 +953,7 @@ It prints directly.
 | --- | --- |
 | `--list-backends` | Every driver that loaded and, for each that did not, why. Each device's rates and buffer sizes. On Linux, whether realtime priority is available and how to get it. The first thing to run when there is too much delay. |
 | `--list-devices` | The devices, per driver. |
+| `--version` | The version, and nothing else. |
 | `--check-update` | What About's Check for updates would say, and whether GitHub could be reached at all. The one command here that uses the network. |
 | `--selftest --chain --stress <input> <output> 60` | Runs the real audio engine between two devices for 60 seconds with every pedal on and the computer under memory pressure, and reports whether it kept up. `<input>` and `<output>` are any part of the devices' names. Add `--backend=asio` or `--buffer=128` to choose. Watch `realtimeRatio`: below 1.0000 means sound was lost. Add `--tone` to send a test tone instead of your input. |
 | `--measure <input> <output>` | With a cable patched from the interface's output back into its input, measures the true round trip. |

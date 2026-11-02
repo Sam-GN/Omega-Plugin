@@ -108,6 +108,8 @@ omega.sh --measure  [--backend=asio] [--buffer=128] <in> <out> [secs]
   through; without it the chain is empty and it is safe to point at speakers.
 - `--measure` is the only number that is not somebody's claim. Patch a lead from the output back
   into the input and it reports the true cable-to-cable round trip; see `LoopbackProbe`.
+- `--version` prints one line, touching no device and no display. The updater runs a new AppImage
+  with it before replacing anything; see "Check for updates".
 - `--check-update` prints what About's Check for updates would say. **The one network request a
   headless run can make.** Its exit code is about reaching GitHub, not about the answer: both
   workflows run it from the AppImage, and a bundle whose runtime cannot complete the TLS
@@ -575,12 +577,22 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   folder is `jpackage.app-path`'s parent; writability is proved by writing, and a folder under
   `Program Files` fails that probe and gets download-only. The script is held against a golden copy
   in `src/test/resources/update/`.
-- **Linux swaps the AppImage.** `APPIMAGE` names the running image; the download lands beside it
-  (a rename must stay on one filesystem), is marked executable, and the last step starts it and
-  deletes the old file — safe, the kernel keeps the inode until the process exits. The child's
-  environment loses `APPIMAGE`, `APPDIR`, `OWD` and `ARGV0`, which describe a mount about to
-  vanish. **Unverified on hardware** at 1.8.0; `known-issues.md` §8.
-- **Save before launch.** The installer's last step runs inside `MainWindow.shutdown`, after the
+- **Linux replaces the AppImage at its own path, after running the new one.** `APPIMAGE` names the
+  running image, resolved through any symlink. The download lands beside it under a hidden staged
+  name (`Installer.stagedName`), so nothing watching the folder takes it for an install, and `stage`
+  does the rest while the program is still open: mark it executable, **run it with `--version`**,
+  rename it over the running image. A checksum proves the file is the one the release built, not
+  that it starts here; deleting the old image on the strength of a launch was how 1.8.0 lost
+  installs to an image that exited at once. **`--version` must stay a flag every release answers**:
+  an image that does not know it opens its window, which fails the 60-second probe harmlessly but
+  means nothing can update to it, and both workflows' smoke tests pin it. The same path rather than
+  the release's name because menu entries, AppImageLauncher integrations, symlinks and renamed files
+  all point at the path; the cost, a stale filename, is `known-issues.md` §8. Both runs use
+  `childEnvironment`: `APPIMAGE`, `APPDIR`, `OWD` and `ARGV0` removed, because they describe a mount
+  about to vanish, and `APPIMAGELAUNCHER_DISABLE=1`, because AppImageLauncher is registered with
+  binfmt_misc as the handler for every AppImage and meets an unknown one with a modal prompt. Any
+  test that runs an image on a machine with it installed needs that variable too, or it hangs.
+- **Save before launch.** The installer's last step, starting the new copy, runs inside `MainWindow.shutdown`, after the
   session and config are saved and the devices released and before the log closes — so the new
   process never reads a session the old one is still writing. Apply therefore ends the process;
   check and download do not and may run while the stream runs. A running stream gets a
@@ -795,7 +807,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-428 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+435 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

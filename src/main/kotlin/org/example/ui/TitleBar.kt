@@ -222,6 +222,8 @@ class TitleBar(
             title = "About",
             heading = "Omega-Plugin",
             lines = Licences.about(version),
+            // A fixed few lines, not a list: the dialog's cap would hide the last of them.
+            maxLines = Int.MAX_VALUE,
             link = "User manual" to Licences.MANUAL_URL,
             // Below the lines, not among them: `Licences.about` answers "what is this and which
             // version", and the button is the one thing on the dialog that does something.

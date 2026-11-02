@@ -43,6 +43,12 @@ import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     when {
+        // One line and out, touching no device and no display. The updater runs a new AppImage with
+        // this before it replaces anything, so every release has to keep answering it.
+        args.contains("--version") -> println(
+            org.example.update.Updates.VERSION_BANNER + (org.example.update.Updates.runningVersionText() ?: "(version unknown)")
+        )
+
         // Which backends loaded, and why the others did not. The fastest answer to "why is it
         // 200 ms on this machine".
         args.contains("--list-backends") -> listBackends()

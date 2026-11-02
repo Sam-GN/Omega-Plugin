@@ -165,15 +165,19 @@ exe again if it still can and shows the zip in Explorer. A half-copied folder is
 
 ---
 
-## 8. The Linux AppImage swap has not run on a real machine
+## 8. After an update on Linux the AppImage's filename can name an older version
 
-**Affects:** 1.8.0-beta, Linux, the Update button.
-**Status:** **unverified.** Tested against a temp folder with the launch injected, nothing more.
+**Affects:** 1.9.1-beta onward, Linux, the Update button.
+**Status:** **by design.** About always shows the real version.
 
-`AppImageInstaller` renames the verified download beside the running image, marks it executable,
-and — after the session is saved — starts it with the AppImage runtime's own variables removed from
-the environment and deletes the old file. Each step is what every AppImage updater does, and
-`InstallerTest` pins the sequence, but the development machine is Windows and the Linux laptop was
-not to hand when 1.8.0 shipped. The first release after 1.8.0 is the first that can be updated to,
-and the first chance to try it. If it fails, the download is still beside the old image and the old
-image is untouched; the line says what happened.
+The new image takes the running image's exact path, so a file called
+`Omega-Plugin-1.9.0-beta-Linux.AppImage` can hold a later version. Giving it the release's name is what
+1.8.0 did, and it broke every menu entry, AppImageLauncher integration and symlink pointing at the
+old path, which is a worse fault than a stale name. Renaming the file by hand is safe.
+
+Also known: `AppImageInstaller` proves a new image runs by asking it for `--version`, which covers
+the image, its runtime, the JVM and the jar, and not the window. An image that passes and then
+fails while opening its window has already replaced the old one. Everything the swap does was run on
+one Manjaro laptop under X11 (Xvfb) with a dummy JACK server, in folders with spaces, through a
+symlink, renamed, without FUSE and under AppImageLauncher, against a locally built stand-in for the
+next release. It has not yet updated into a real published release.

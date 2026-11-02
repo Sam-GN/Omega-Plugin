@@ -24,6 +24,7 @@ import java.lang.ProcessBuilder.Redirect
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 /**
@@ -31,9 +32,9 @@ import java.util.zip.ZipInputStream
  * program can replace itself on Linux and cannot on Windows.
  *
  * The order of operations is the window's, not the installer's: the download and [stage] may run
- * while the stream runs; the action [stage] returns runs **after** the session and settings are
- * saved and immediately before the process exits, so the new copy never reads a session the old one
- * is still writing.
+ * while the stream runs, so a failure there is a line in the dialog and the program carries on. The
+ * action [stage] returns runs **after** the session and settings are saved and immediately before
+ * the process exits, so the new copy never reads a session the old one is still writing.
  */
 interface Installer {
 
@@ -42,6 +43,12 @@ interface Installer {
 
     /** Where a download goes when it is going to be applied. */
     fun downloadFolder(): Path
+
+    /**
+     * What a verified download is called while it waits for [stage], given the release's name for
+     * it. Only ever used where the download is going to be applied.
+     */
+    fun stagedName(assetName: String): String = assetName
 
     /**
      * Prepares [download], the verified bundle, for installation and returns the step that
@@ -56,68 +63,135 @@ interface Installer {
 }
 
 /**
- * Linux: the AppImage swaps itself.
+ * Linux: the AppImage replaces itself, at the path it is already at.
  *
  * The AppImage runtime sets `APPIMAGE` to the running image's path. The download is written beside
- * it — a rename must stay on one filesystem — and the final step starts the new image, deletes the
- * old one and exits. Unlinking a running AppImage is safe: the kernel keeps the inode until the
- * process exits, which is what every AppImage updater relies on.
+ * it, because a rename must stay on one filesystem, and [stage] does everything that can fail while
+ * the program is still running:
  *
- * The child is started with the runtime's own variables removed from its environment. `APPIMAGE`,
- * `APPDIR`, `OWD` and `ARGV0` describe *this* image and its mount, which is about to disappear;
- * the new image's runtime sets its own.
+ * 1. **The new image is run**, with `--version`. A checksum proves the file is the one the release
+ *    built, not that it starts on this machine: a newer glibc, a missing FUSE or a wrong architecture
+ *    all pass it. This is the only test that matters and it costs one JVM start, so it happens while
+ *    the old copy is untouched, and a failure ends with nothing changed but the download deleted.
+ * 2. **It is renamed over the running image.** Atomic, so the path always holds a whole program, and
+ *    safe, because the kernel keeps the old inode until the process exits. The same path rather than
+ *    the release's versioned name because everything that points at the program points at the path:
+ *    a menu entry, an AppImageLauncher integration, a symlink, a file the user renamed. A new name
+ *    breaks all of them. The cost is a file called `…-1.8.1-…` holding a later version; About says
+ *    which it really is. Windows made the same choice, for the same reason.
+ *
+ * The step left for the window starts the image at that path.
+ *
+ * Both runs get [childEnvironment]: the runtime's own variables removed, and AppImageLauncher told
+ * to stand aside. It registers itself with the kernel as the handler for every AppImage, and an
+ * image it does not recognise gets a modal "integrate?" prompt instead of a program, which would
+ * hang the test run and turn the promised restart into a question.
  */
 class AppImageInstaller(
     /** The running image, from `APPIMAGE`, or null when not run from one. */
     private val image: Path?,
+    /** Runs the new image and returns why it failed, or null. Injected so a test need not start one. */
+    private val probe: (Path) -> String? = ::tryRunning,
     /** Starts the new image. Injected so the swap is testable without launching anything. */
     private val launch: (Path) -> Unit = ::startDetached,
 ) : Installer {
 
+    /** The file itself: a symlink has to survive the swap, and renaming onto it would replace it. */
+    private val target: Path?
+        get() = image?.let { path -> runCatching { path.toRealPath() }.getOrElse { path.toAbsolutePath() } }
+
     override fun cannotApply(): String? {
-        val running = image ?: return Installer.NOT_FROM_BUNDLE
-        val folder = running.toAbsolutePath().parent
+        val running = target ?: return Installer.NOT_FROM_BUNDLE
+        val folder = running.parent
         if (folder == null || !Files.isDirectory(folder) || !Files.isWritable(folder)) {
-            return "Could not write to the folder holding the AppImage, $folder. " +
-                "Download it from the Releases page and replace the file by hand."
+            return "Could not write to the folder holding the AppImage, $folder, so this copy " +
+                "cannot replace itself. Replace the file by hand."
         }
         return null
     }
 
-    override fun downloadFolder(): Path = image?.toAbsolutePath()?.parent ?: Updates.downloadsFolder()
+    override fun downloadFolder(): Path = target?.parent ?: Updates.downloadsFolder()
+
+    /** Hidden and not named `.AppImage`, so nothing watching the folder takes it for an install. */
+    override fun stagedName(assetName: String): String = ".$assetName.new"
 
     override fun stage(download: Path, progress: (String) -> Unit): () -> Unit {
-        val old = image?.toAbsolutePath() ?: throw UpdateException(Installer.NOT_FROM_BUNDLE, reachedServer = true)
+        val installed = target ?: throw UpdateException(Installer.NOT_FROM_BUNDLE, reachedServer = true)
         val fresh = download.toAbsolutePath()
-        if (!fresh.toFile().setExecutable(true, false) && !Files.isExecutable(fresh)) {
-            throw UpdateException("Could not mark $fresh executable.", reachedServer = true)
+        try {
+            if (!fresh.toFile().setExecutable(true, false) && !Files.isExecutable(fresh)) {
+                throw UpdateException("Could not mark $fresh executable.", reachedServer = true)
+            }
+            progress("Testing the new version…")
+            probe(fresh)?.let { why -> throw UpdateException("$WOULD_NOT_START ($why)", reachedServer = true) }
+            // ATOMIC_MOVE replaces an existing target on Linux and ignores every other option.
+            Files.move(fresh, installed, StandardCopyOption.ATOMIC_MOVE)
+        } catch (e: UpdateException) {
+            runCatching { Files.deleteIfExists(fresh) }
+            throw e
+        } catch (e: IOException) {
+            runCatching { Files.deleteIfExists(fresh) }
+            throw UpdateException("Could not replace $installed: ${e.message}", reachedServer = true, cause = e)
         }
         progress("Ready to restart…")
-        return {
-            launch(fresh)
-            // Only after the new one is running, and only if it is a different file: a user who
-            // renamed the image to the asset's exact name would otherwise lose the copy just made.
-            if (fresh != old) runCatching { Files.deleteIfExists(old) }
-        }
+        return { launch(installed) }
     }
 
     companion object {
         val RUNTIME_VARIABLES = setOf("APPIMAGE", "APPDIR", "OWD", "ARGV0")
 
-        /** The environment for the new image: this process's, less the AppImage runtime's own. */
-        fun childEnvironment(parent: Map<String, String>): Map<String, String> =
-            parent.filterKeys { it !in RUNTIME_VARIABLES }
+        /** AppImageLauncher's own switch: run the image, ask nothing. Harmless where it is absent. */
+        const val LAUNCHER_DISABLE = "APPIMAGELAUNCHER_DISABLE"
 
-        private fun startDetached(image: Path) {
-            val builder = ProcessBuilder(image.toString())
+        const val WOULD_NOT_START =
+            "The new version would not start on this machine, so this copy has been left as it was " +
+                "and the download deleted."
+
+        /** A JVM start, or an extraction and a JVM start where there is no FUSE. Generous on purpose. */
+        private const val PROBE_SECONDS = 60L
+
+        /** The environment for the new image: this process's, less the runtime's, plus the switch. */
+        fun childEnvironment(parent: Map<String, String>): Map<String, String> =
+            parent.filterKeys { it !in RUNTIME_VARIABLES } + (LAUNCHER_DISABLE to "1")
+
+        private fun command(image: Path, vararg arguments: String): ProcessBuilder {
+            val builder = ProcessBuilder(listOf(image.toString()) + arguments)
                 .directory(image.parent?.toFile())
-                .redirectOutput(Redirect.DISCARD)
                 .redirectError(Redirect.DISCARD)
                 .redirectInput(Redirect.from(java.io.File("/dev/null")))
             val env = builder.environment()
-            RUNTIME_VARIABLES.forEach { env.remove(it) }
+            val child = childEnvironment(env)
+            env.clear()
+            env.putAll(child)
+            return builder
+        }
+
+        /**
+         * `--version` must stay a flag every release answers. An image that does not know it opens
+         * its window instead, which fails here as no answer rather than doing any harm.
+         */
+        private fun tryRunning(image: Path): String? {
+            val process = try {
+                command(image, "--version").start()
+            } catch (e: IOException) {
+                return e.message ?: "it could not be run"
+            }
+            if (!process.waitFor(PROBE_SECONDS, TimeUnit.SECONDS)) {
+                process.descendants().forEach { it.destroyForcibly() }
+                process.destroyForcibly()
+                return "no answer in $PROBE_SECONDS seconds"
+            }
+            if (process.exitValue() != 0) return "it exited with code ${process.exitValue()}"
+            // What is already there rather than to end of stream: the runtime's FUSE helper holds
+            // the other end of this pipe for a moment after the program has gone.
+            val input = process.inputStream
+            val answer = String(input.readNBytes(input.available()))
+            return if (answer.lines().any { it.startsWith(Updates.VERSION_BANNER) }) null else "it did not answer"
+        }
+
+        private fun startDetached(image: Path) {
             try {
-                builder.start()
+                command(image).redirectOutput(Redirect.DISCARD).start()
             } catch (e: IOException) {
                 throw UpdateException("Could not start $image: ${e.message}", reachedServer = true, cause = e)
             }
@@ -188,7 +262,7 @@ class WindowsInstaller(
         const val HELPER_NAME = "omega-update.cmd"
         const val STAGE_FOLDER = "omega-update"
         const val NOT_WRITABLE =
-            "Could not write to the program folder. Download it from the Releases page and unzip it over this one."
+            "Could not write to the program folder, so this copy cannot replace itself. Unzip the download over it by hand."
 
         /** Proof by doing: create and delete a file. Permissions on Windows are not worth reading. */
         fun isWritable(folder: Path): Boolean {

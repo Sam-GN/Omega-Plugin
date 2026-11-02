@@ -82,5 +82,8 @@ object Updates {
         Verdict.NoReleases -> "GitHub lists no releases."
     }
 
+    /** How `--version` starts its one line, which is what proves a new image runs. See [AppImageInstaller]. */
+    const val VERSION_BANNER = "Omega-Plugin "
+
     const val RELEASES_PAGE = "https://github.com/Sam-GN/Omega-Plugin/releases"
 }

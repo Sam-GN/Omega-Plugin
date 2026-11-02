@@ -9,6 +9,48 @@ unverified, it says so.
 
 ---
 
+## [1.9.1-beta] — 2026-11-01
+
+### Fixed — updating on Linux, the first time it was run on a real machine
+
+Until now the AppImage swap had only been tested with the launch faked. Running real images through
+the real window on a Linux laptop found three faults, all fixed here and each re-run afterwards the
+same way:
+
+- **An update that could not start destroyed the install.** The old AppImage was deleted as soon as
+  the new one had been launched, without waiting to see whether it ran. A new image that exited at
+  once, as one needing a newer glibc would, left a dead file, nothing running and no message
+  anywhere. The downloaded image is now run with `--version` first, while the old copy is untouched
+  and the program is still open. If it does not answer, the download is deleted, the line says why,
+  and nothing else has changed.
+- **Updating under AppImageLauncher did not reopen the program.** It closed, its menu entry vanished
+  and AppImageLauncher asked whether to integrate the "new" file. The program now opens again with
+  no prompt and the menu entry keeps working.
+- **Every update moved the program.** The new image took the release's versioned name, so a menu
+  entry, a symlink or a file the user had renamed was left pointing at nothing. The new image now
+  takes the path of the running one, which is what fixes the entry above as well. The cost is that a
+  file called `…-1.9.0-…` can hold a later version: About always says which it really is, and
+  renaming the file is safe.
+
+### Fixed — smaller things in the same path
+
+- A release with no checksum list is refused before the download, not after 40 MB of it.
+- Where the program cannot replace itself, the line no longer tells you to download from the Releases
+  page a file it has just downloaded, on either platform.
+- That file is now executable on Linux, so it runs without a `chmod`.
+
+### Fixed — About shows all of itself
+
+About ended in a grey "… and 1 more" where the Java version should have been. The dialog's limit of
+eight lines is for long lists, and it counted About's two blank spacer lines against it.
+
+### Added
+
+- `--version` prints one line and exits, touching no device and no display. The updater depends on
+  it and both workflows' smoke tests run it.
+
+---
+
 ## [1.9.0-beta] — 2026-11-01
 
 ### Added — the window comes back where you left it

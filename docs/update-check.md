@@ -20,7 +20,11 @@ build departed from the text below:
 - **A developer override.** `-Domega.update.source=<folder>` answers the two requests and the
   download from canned files, so the whole path can be driven against a release that does not
   exist. Nothing shipped sets it; it never touches the network.
-- **The Linux swap is unverified on hardware** at the time of shipping; `known-issues.md` §8.
+- **The Linux swap changed in 1.9.1**, the first time it was run on real hardware. §4.2 deletes the
+  old image and leaves the new one under the release's name; that lost the install when the new
+  image would not start, and broke every path pointing at the old one. The new image is now run
+  with `--version` first and then renamed over the running image. See "Check for updates" in
+  CLAUDE.md, which overrides §4.2.
 
 The idea in one paragraph. The About dialog gets a **Check for updates** button. Pressing it asks
 GitHub for the newest published release and says either "you have the newest version" or shows

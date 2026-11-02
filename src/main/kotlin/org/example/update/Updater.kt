@@ -63,6 +63,8 @@ class Updater(
     fun update(available: Verdict.Available) = work("omega-update-download") {
         val asset = available.asset
             ?: throw UpdateException(Updates.notForPlatform(available.release, platform), reachedServer = true)
+        // Before the download: a file that cannot be verified is not worth 40 MB of anyone's data.
+        val sums = available.release.checksums ?: throw UpdateException(NO_CHECKSUMS, reachedServer = true)
         val reason = installer.cannotApply()
         val folder = if (reason == null) installer.downloadFolder() else Updates.downloadsFolder()
         Files.createDirectories(folder)
@@ -72,18 +74,18 @@ class Updater(
                 post { listener.progress(Updates.downloading(done, total)) }
             }
             post { listener.progress("Checking…") }
-            val sums = available.release.checksums
-                ?: throw UpdateException(NO_CHECKSUMS, reachedServer = true)
             val problem = Checksums.verify(part, asset.name, Checksums.parse(source.fetch(sums.url)))
             if (problem != null) throw UpdateException(problem, reachedServer = true)
         } catch (t: Throwable) {
             runCatching { Files.deleteIfExists(part) }
             throw t
         }
-        val file = folder.resolve(asset.name)
+        val file = folder.resolve(if (reason == null) installer.stagedName(asset.name) else asset.name)
         Files.move(part, file, StandardCopyOption.REPLACE_EXISTING)
         Log.info("update", "Downloaded and verified $file")
         if (reason != null) {
+            // What the user does next is run it. The zip on Windows has no such bit to set.
+            if (platform == Platform.LINUX) file.toFile().setExecutable(true, false)
             post { listener.downloaded(file, reason) }
             return@work
         }
