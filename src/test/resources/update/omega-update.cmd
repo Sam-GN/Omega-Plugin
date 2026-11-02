@@ -13,15 +13,19 @@ if not errorlevel 1 (
     "%SystemRoot%\System32\ping.exe" -n 2 127.0.0.1 >nul
     goto wait
 )
-del /q "%DST%\app\*.jar" 2>nul
-"%SystemRoot%\System32\robocopy.exe" "%SRC%" "%DST%" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul
-if errorlevel 8 (
-    start "" "%SystemRoot%\explorer.exe" /select,"%ZIP%"
-    start "" "%DST%\OmegaPlugin.exe"
-    goto end
-)
+set "OPTIONS=/R:5 /W:1 /NFL /NDL /NJH /NJS /NP"
+"%SystemRoot%\System32\robocopy.exe" "%SRC%\app" "%DST%\app" /MIR %OPTIONS% >nul
+if errorlevel 8 goto failed
+"%SystemRoot%\System32\robocopy.exe" "%SRC%\runtime" "%DST%\runtime" /MIR %OPTIONS% >nul
+if errorlevel 8 goto failed
+"%SystemRoot%\System32\robocopy.exe" "%SRC%" "%DST%" /E %OPTIONS% >nul
+if errorlevel 8 goto failed
 start "" "%DST%\OmegaPlugin.exe"
 rd /s /q "%STAGE%" 2>nul
 del /q "%ZIP%" 2>nul
+goto end
+:failed
+start "" "%SystemRoot%\explorer.exe" /select,"%ZIP%"
+start "" "%DST%\OmegaPlugin.exe"
 :end
 (goto) 2>nul & del "%~f0"

@@ -9,6 +9,34 @@ unverified, it says so.
 
 ---
 
+## [2.0.3-beta] — 2026-11-01
+
+### Fixed — Rescan, Start and Rec could be hidden on a smaller screen
+
+When the window was narrower than the top bar, those three buttons wrapped onto a second line and
+the bar did not grow to show them, so the row beneath covered them and there was no way to start the
+sound. It was found on a 1504-wide laptop desktop at 150% scaling. The bar now grows to fit however
+many lines it needs, when the window opens and whenever it is resized.
+
+---
+
+## [2.0.2-beta] — 2026-11-01
+
+### Fixed — an update leaves nothing of the old version behind
+
+- **Linux without FUSE.** Running this way unpacks the whole program into the temp folder, and every
+  version left its 65 MB copy there. The program now removes older copies of itself when it starts.
+  It removes only folders it can prove are its own, never another AppImage's, and never one a running
+  copy is using. Its current copy stays, because the next start reuses it.
+- **Windows.** An update added and replaced files but never removed one, so anything an older version
+  shipped and a newer one dropped stayed in the folder for ever. The `app` and `runtime` folders are now
+  made to match the new version exactly. Anything you keep beside `OmegaPlugin.exe` is left alone.
+- **An update that was cut short.** If the program died part-way through, a hidden partial file stayed
+  beside it until the next update. It is now removed at the next start, once it has been untouched for
+  ten minutes, so a second running copy cannot lose a download in progress.
+
+---
+
 ## [2.0.1-beta] — 2026-11-01
 
 ### Fixed — release notes read as text in the update dialog

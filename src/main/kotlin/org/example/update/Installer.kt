@@ -338,9 +338,11 @@ class WindowsInstaller(
          * shell with Git's tools first on the PATH.
          *
          * Waits with `tasklist` and `ping` rather than PowerShell's `Wait-Process`, so the script
-         * runs on any Windows with nothing but `cmd`. `app\*.jar` is deleted first because the jar
-         * is versioned by name and the launcher's `.cfg` names the new one; a stale jar would be
-         * dead weight. `robocopy` exit codes below 8 are success. On a copy that failed the old
+         * runs on any Windows with nothing but `cmd`. `app` and `runtime` are mirrored, so a file an
+         * older version shipped and this one does not is removed rather than left for ever; nothing
+         * of the user's belongs in either. The folder itself only gets a plain copy, because `/MIR`
+         * there would delete anything they keep beside the exe. `robocopy` exit codes below 8 are
+         * success. On a copy that failed the old
          * program is started again if it still can be, and the zip is shown in Explorer so the user
          * can unzip it by hand. The last line is the idiom for a batch file deleting itself.
          */
@@ -361,16 +363,20 @@ class WindowsInstaller(
                 "%SystemRoot%\System32\ping.exe" -n 2 127.0.0.1 >nul
                 goto wait
             )
-            del /q "%DST%\app\*.jar" 2>nul
-            "%SystemRoot%\System32\robocopy.exe" "%SRC%" "%DST%" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul
-            if errorlevel 8 (
-                start "" "%SystemRoot%\explorer.exe" /select,"%ZIP%"
-                start "" "%DST%\$exe"
-                goto end
-            )
+            set "OPTIONS=/R:5 /W:1 /NFL /NDL /NJH /NJS /NP"
+            "%SystemRoot%\System32\robocopy.exe" "%SRC%\app" "%DST%\app" /MIR %OPTIONS% >nul
+            if errorlevel 8 goto failed
+            "%SystemRoot%\System32\robocopy.exe" "%SRC%\runtime" "%DST%\runtime" /MIR %OPTIONS% >nul
+            if errorlevel 8 goto failed
+            "%SystemRoot%\System32\robocopy.exe" "%SRC%" "%DST%" /E %OPTIONS% >nul
+            if errorlevel 8 goto failed
             start "" "%DST%\$exe"
             rd /s /q "%STAGE%" 2>nul
             del /q "%ZIP%" 2>nul
+            goto end
+            :failed
+            start "" "%SystemRoot%\explorer.exe" /select,"%ZIP%"
+            start "" "%DST%\$exe"
             :end
             (goto) 2>nul & del "%~f0"
             """.trimIndent().replace("\n", "\r\n") + "\r\n"

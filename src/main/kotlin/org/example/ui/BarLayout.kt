@@ -23,6 +23,7 @@ import java.awt.Component
 import java.awt.Container
 import java.awt.Dimension
 import java.awt.LayoutManager
+import javax.swing.SwingUtilities
 
 /**
  * A wrapping row layout for the device bar.
@@ -35,8 +36,23 @@ import java.awt.LayoutManager
  * on **one** line, any surplus width is handed to the components passed to [grow] — the two device
  * combos — so they still stretch to fill the bar. Once it wraps, stretching stops and the rows pack
  * left, because a stretched control on a wrapped row just looks like a mistake.
+ *
+ * Its height depends on its width, and Swing asks for the height first: the bar is told how tall to
+ * be before it has been told how wide it is, and nothing asks again once it knows. So a bar that
+ * wrapped kept the height of one row and the panel below covered what had wrapped, which on a
+ * 1504-wide desktop was Rescan, Start and Rec. [layoutContainer] therefore compares the height it
+ * needs with the one it got and, when they differ, asks for one more pass. The answer is remembered
+ * per width and height, so a parent that will not give it the room cannot make it ask for ever.
  */
-class BarLayout(private val hgap: Int = 10, private val vgap: Int = 10) : LayoutManager {
+class BarLayout(
+    private val hgap: Int = 10,
+    private val vgap: Int = 10,
+    /** Asks for another layout pass. Injected so a test can run the second pass itself. */
+    private val relayout: (Container) -> Unit = { parent -> SwingUtilities.invokeLater { parent.revalidate() } },
+) : LayoutManager {
+
+    /** The width and needed height last asked about, so each is asked once. */
+    private var asked: Pair<Int, Int>? = null
 
     private val growable = LinkedHashSet<Component>()
 
@@ -97,6 +113,14 @@ class BarLayout(private val hgap: Int = 10, private val vgap: Int = 10) : Layout
                 x += w + hgap
             }
             y += rowHeight + vgap
+        }
+        val needed = y - vgap + insets.bottom
+        val request = parent.width to needed
+        if (needed == parent.height) {
+            asked = null
+        } else if (asked != request) {
+            asked = request
+            relayout(parent)
         }
     }
 

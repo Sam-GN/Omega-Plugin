@@ -569,6 +569,13 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   the draft is the moment users are told. The newest is chosen **by version**, not by position, so a
   hot-fix published for an older line cannot win. `Versions` is numbers first, then no suffix beats
   a suffix, then suffixes as text.
+- **Nothing of an old version stays.** `Leftovers.sweep` runs once, on a low-priority thread after
+  the window is up and never on a diagnostic path: `--version` tests a new image and must change
+  nothing. It removes `Omega-Plugin-*.part` and `.Omega-Plugin-*.new` untouched for ten minutes, so a
+  second running copy keeps its download, and `appimage_extracted_<hash>` folders the runtime leaves
+  in `TMPDIR` without FUSE, one per version at 65 MB. Every AppImage uses that prefix, so one goes
+  only with this program's desktop entry and jar in it, this user's ownership, not this process's
+  and not any running process's. Each of those rules has a test saying what must survive.
 - **What a user keeps carries no version.** `Omega-Plugin-Linux.AppImage`, the `OmegaPlugin` folder
   and `OmegaPlugin.jar` inside either bundle, since 2.0.0: a shortcut needs a path that survives an
   update, and a name that survives an update cannot truthfully state a version. The jar is on the
@@ -578,10 +585,13 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   says why. No migration was written, because nothing before 1.8.0 can update itself and 1.8.0 to
   1.9.x were never published: everyone arrives at 2.0.0 by hand.
 - **Windows replaces in place.** `WindowsInstaller` expands the zip itself (`java.util.zip`), then
-  writes `omega-update.cmd` — plain `cmd`: wait on the PID with `tasklist`, delete `app\*.jar`,
+  writes `omega-update.cmd` — plain `cmd`: wait on the PID with `tasklist`,
   `robocopy` the new folder **into** the installed one, start the exe, clean up, delete itself —
   and starts it minimised. Into the folder rather than beside it because moving the exe breaks every
-  shortcut and taskbar pin. `del app\*.jar` stays for a jar under any older name. The installed
+  shortcut and taskbar pin. `app` and `runtime` are mirrored with `/MIR`, so a file a version
+  dropped does not stay for ever; the folder itself only gets `/E`, because `/MIR` there would delete
+  what a user keeps beside the exe. Wine's `robocopy` fails on everything, so this cannot be tried
+  off Windows. The installed
   folder is `jpackage.app-path`'s parent; writability is proved by writing, and a folder under
   `Program Files` fails that probe and gets download-only. The script is held against a golden copy
   in `src/test/resources/update/`. Two rules it learned on Windows in 1.9.2: it begins with
@@ -823,7 +833,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-453 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+468 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

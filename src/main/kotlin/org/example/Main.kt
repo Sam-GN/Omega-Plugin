@@ -105,6 +105,14 @@ fun main(args: Array<String>) {
                 val build = {
                     try {
                         MainWindow().isVisible = true
+                        // What an update left behind, on a thread of its own: this is disk, and the
+                        // window waits for nothing here. After the window, so the log is open to
+                        // record it, and only on this path, because `--version` is how a new image
+                        // is tested and that must change nothing.
+                        Thread({ runCatching { org.example.update.Leftovers.sweep() } }, "omega-leftovers").apply {
+                            isDaemon = true
+                            priority = Thread.MIN_PRIORITY
+                        }.start()
                     } catch (t: Throwable) {
                         org.example.ui.Splash.dismiss()
                         throw t

@@ -251,6 +251,10 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **The top bar grows when it wraps, 2.0.3-beta.** Rescan, Start and Rec stay reachable on a narrow
+  window.
+- **Nothing of an old version stays, 2.0.2-beta.** Older extracted copies, files a version dropped on
+  Windows, and partial downloads are all removed.
 - **Release notes read as text, 2.0.1-beta.** The update dialog shows the changelog as paragraphs and
   bullets rather than raw markdown; `ReleaseNotes.plain` is tested against every section of it.
 - **Names without versions, 2.0.0-beta.** `Omega-Plugin-Linux.AppImage`, an `OmegaPlugin` folder, and
