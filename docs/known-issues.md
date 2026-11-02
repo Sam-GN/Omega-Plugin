@@ -199,3 +199,16 @@ folder: `ascii` and `José only` answered, `José Пётр` did not.
 It follows that Update cannot bring the program back in such a folder either, but it never ran there
 in the first place. The way round is to extract the zip somewhere whose path is plain, such as
 `C:\Omega-Plugin`. Fixing it means a different launcher, which is not planned.
+
+---
+
+## 10. On Linux, under a locale that is not UTF-8, Java will not start from a non-ASCII working folder
+
+**Affects:** every Linux version so far.
+**Status:** **not fixed; a limit of the JVM.** Found 2026-11-01 while checking the updater.
+
+With `LC_ALL=C`, run from a working folder such as `José Пётр`, the program stops with an
+`ExceptionInInitializerError` from `java.io.FilePermission`, before any code of ours runs. The same
+image in the same folder starts normally when the working folder is plain, and everything works under
+a UTF-8 locale, which is what a desktop sets. The way round is to start it from another folder, or
+under a UTF-8 locale. Measured with the 1.9.2 AppImage.

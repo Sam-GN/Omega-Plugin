@@ -601,7 +601,10 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   process never reads a session the old one is still writing. Apply therefore ends the process;
   check and download do not and may run while the stream runs. A running stream gets a
   `ConfirmDialog` before the download starts.
-- **Where it cannot apply** — no `jpackage.app-path` or `APPIMAGE`, or an unwritable folder — the
+- **Where it cannot apply** — no `jpackage.app-path` or `APPIMAGE`, a path the locale cannot
+  represent (`UnreadablePathInstaller`, which `Updates.guarded` falls back to, because `UpdatePanel`
+  builds the installer as About opens and a throw there means no dialog at all), or an unwritable
+  folder — the
   button reads Download, the verified file goes to `Updates.downloadsFolder()` and the line says
   why. Never a silent no-op.
 - **`-Domega.update.source=<folder>`** answers the requests and the download from canned files
@@ -811,7 +814,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-435 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+438 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

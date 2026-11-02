@@ -791,8 +791,9 @@ under **☰ → About**, and it says so right under the first of them.
   If it does not start, the line says so, the download is deleted and the version you have carries
   on as if nothing had happened.
 - **When it cannot replace itself**, the button reads **Download** instead and the line says why:
-  the program is in a folder it is not allowed to write to, such as `Program Files`, or it was not
-  installed from a release bundle. The checked download goes to your Downloads folder, and you
+  the program is in a folder it is not allowed to write to, such as `Program Files`, it was not
+  installed from a release bundle, or the system's language setting cannot spell the name of its
+  folder. The checked download goes to your Downloads folder, and you
   install it by hand as in [Installing and updating](#installing-and-updating).
 - A download that does not match what was published is deleted and the line says so. That is a
   reason to look at the Releases page, not to press again.

@@ -251,6 +251,8 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **About opens whatever the locale, 1.9.3-beta.** A path Java cannot represent used to stop the
+  dialog appearing; the copy now offers Download and says why.
 - **The Linux update run for real, 1.9.1-beta.** Real AppImages through the real window found three
   faults in the swap; the new image is now tested with `--version` and then takes the old one's path.
 - **The window comes back where it was, 1.9.0-beta.** Monitor, size, position and maximised, for

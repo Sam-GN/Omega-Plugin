@@ -19,7 +19,9 @@
  */
 package org.example.update
 
+import org.example.util.Log
 import java.nio.file.Files
+import java.nio.file.InvalidPathException
 import java.nio.file.Path
 
 /**
@@ -41,13 +43,29 @@ object Updates {
         System.getProperty(FileSource.PROPERTY)?.let { FileSource(Path.of(it)) }
             ?: GitHubSource(runningVersionText())
 
-    fun installer(): Installer = when (Platform.current()) {
-        Platform.LINUX -> AppImageInstaller(System.getenv("APPIMAGE")?.takeIf { it.isNotBlank() }?.let(Path::of))
-        Platform.WINDOWS -> WindowsInstaller(
-            launcher = System.getProperty("jpackage.app-path")?.takeIf { it.isNotBlank() }?.let(Path::of),
-            temp = Path.of(System.getProperty("java.io.tmpdir")),
-            pid = ProcessHandle.current().pid(),
-        )
+    fun installer(): Installer = guarded {
+        when (Platform.current()) {
+            Platform.LINUX -> AppImageInstaller(System.getenv("APPIMAGE")?.takeIf { it.isNotBlank() }?.let(Path::of))
+            Platform.WINDOWS -> WindowsInstaller(
+                launcher = System.getProperty("jpackage.app-path")?.takeIf { it.isNotBlank() }?.let(Path::of),
+                temp = Path.of(System.getProperty("java.io.tmpdir")),
+                pid = ProcessHandle.current().pid(),
+            )
+        }
+    }
+
+    /**
+     * [build], or [UnreadablePathInstaller] if it names a path Java cannot represent.
+     *
+     * The dialog builds its installer as it opens, so what is thrown here is thrown from the click
+     * on About: under a locale that is not UTF-8, an AppImage in a folder with an é in its name
+     * made the whole dialog fail to appear, with nothing on the screen to say so.
+     */
+    internal fun guarded(build: () -> Installer): Installer = try {
+        build()
+    } catch (e: InvalidPathException) {
+        Log.warn("update", "The installed path cannot be represented in this locale: ${e.message}")
+        UnreadablePathInstaller
     }
 
     /** Where a download goes when it cannot be applied: the user's Downloads folder, else home. */

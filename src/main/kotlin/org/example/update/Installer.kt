@@ -63,6 +63,24 @@ interface Installer {
 }
 
 /**
+ * The copy is a release bundle, but the path it runs from cannot be represented in this locale, so
+ * there is nothing to replace it through. It can still download, like any copy that cannot apply.
+ */
+object UnreadablePathInstaller : Installer {
+
+    const val REASON =
+        "This system's language setting cannot spell the name of the folder this program is in, so " +
+            "it cannot replace itself. Replace it by hand."
+
+    override fun cannotApply(): String = REASON
+
+    override fun downloadFolder(): Path = Updates.downloadsFolder()
+
+    override fun stage(download: Path, progress: (String) -> Unit): () -> Unit =
+        throw UpdateException(REASON, reachedServer = true)
+}
+
+/**
  * Linux: the AppImage replaces itself, at the path it is already at.
  *
  * The AppImage runtime sets `APPIMAGE` to the running image's path. The download is written beside

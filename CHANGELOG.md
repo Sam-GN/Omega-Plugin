@@ -9,6 +9,22 @@ unverified, it says so.
 
 ---
 
+## [1.9.3-beta] — 2026-11-01
+
+### Fixed — About could fail to open, and say nothing
+
+Under a language setting that is not UTF-8, such as `LC_ALL=C`, an AppImage in a folder with an
+accent or any other non-ASCII letter in its name could not open About: the menu item did nothing, and
+the reason went only to the log, if logging was on. The dialog now opens. Update becomes Download,
+because a copy that cannot name its own file cannot replace it, and the line says why. A normal
+UTF-8 desktop never had the fault. The cause was one path read as the dialog was being built, and
+Windows reads its path the same way, so both are covered.
+
+known-issues §10 records the neighbouring limit: under such a setting, Java itself will not start
+from a working folder with such a name.
+
+---
+
 ## [1.9.2-beta] — 2026-11-01
 
 ### Fixed — updating on Windows, checked on Windows for the first time since 1.8.0

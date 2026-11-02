@@ -29,6 +29,7 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -171,6 +172,29 @@ class InstallerTest {
             mapOf("HOME" to "/home/u", "PATH" to "/bin", "APPIMAGELAUNCHER_DISABLE" to "1"),
             AppImageInstaller.childEnvironment(env),
         )
+    }
+
+    // ---------------------------------------------------------------- A path Java cannot hold
+
+    @Test
+    fun `a path that cannot be represented gives a copy that downloads, not a dialog that never opens`() {
+        // A NUL is the one character no platform's Path accepts, under any locale, which is what
+        // stands in here for a name the locale cannot encode.
+        val installer = Updates.guarded { AppImageInstaller(Path.of("/opt/omega\u0000.AppImage")) }
+        assertEquals(UnreadablePathInstaller, installer)
+        assertEquals(UnreadablePathInstaller.REASON, installer.cannotApply())
+        assertNotEquals(Installer.NOT_FROM_BUNDLE, installer.cannotApply(), "it is from a bundle")
+    }
+
+    @Test
+    fun `a path that can be represented is left alone`() {
+        val installer = AppImageInstaller(null, { null }) { }
+        assertEquals(installer, Updates.guarded { installer })
+    }
+
+    @Test
+    fun `an installer with no path refuses to stage rather than guessing`() {
+        assertFailsWith<UpdateException> { UnreadablePathInstaller.stage(Path.of("x")) { } }
     }
 
     // ---------------------------------------------------------------- Windows
