@@ -794,12 +794,13 @@ under **☰ → About**, and it says so right under the first of them.
   If it does not start, the line says so, the download is deleted and the version you have carries
   on as if nothing had happened.
 - **When it cannot replace itself**, the button reads **Download** instead and the line says why:
-  the program is in a folder it is not allowed to write to, such as `Program Files`, it was not
-  installed from a release bundle (or was started from inside another AppImage), or the system's
-  language setting cannot spell the name of its folder. The checked download goes to your Downloads
-  folder, beside anything already there rather than over it, and the line says how to install it:
-  move it over your old copy (on Windows, unzip it over your OmegaPlugin folder), so you keep one
-  copy and your shortcuts open the new version.
+  the program is in a folder it is not allowed to write to, such as `Program Files`, it sits at the
+  root of a drive or has a linked folder inside it, it was not installed from a release bundle (or
+  was started from inside another AppImage), or the system's language setting cannot spell the name
+  of its folder. The checked download goes to your Downloads folder, beside anything already there
+  rather than over it, and the line says how to install it: move it over your old copy (on Windows,
+  unzip it over your OmegaPlugin folder), so you keep one copy and your shortcuts open the new
+  version.
 - A download that does not match what was published is deleted and the line says so. That is a
   reason to look at the Releases page, not to press again.
 

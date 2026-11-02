@@ -20,6 +20,7 @@
 package org.example.update
 
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -378,6 +379,7 @@ class InstallerTest {
         assertEquals(golden, script)
         // The properties a reader would check by eye, stated so a golden-copy update cannot lose them.
         assertContains(script, "chcp 65001 >nul", message = "cmd reads the file in the OEM code page; this makes it UTF-8")
+        assertContains(script, "setlocal DisableDelayedExpansion", message = "a ! in a path must survive a cmd set to expand late")
         assertContains(script, "\"%SystemRoot%\\System32\\tasklist.exe\" /FI \"PID eq %PID%\"")
         assertContains(script, "| \"%SystemRoot%\\System32\\find.exe\" \"%PID%\"", message = "a bare find can be GNU find")
         assertContains(script, "\"%SRC%\\app\" \"%DST%\\app\" /MIR", message = "a file a version dropped must go")
@@ -387,7 +389,16 @@ class InstallerTest {
         assertFalse(Regex("""^\s*(tasklist|find|ping|robocopy|explorer)(\.exe)?\s""", RegexOption.MULTILINE).containsMatchIn(script), "every external command by full path")
         assertContains(script, "if errorlevel 8")
         assertContains(script, "start \"\" \"%DST%\\OmegaPlugin.exe\"")
-        assertContains(script, "(goto) 2>nul & del \"%~f0\"")
+        assertContains(script, "(goto) 2>nul & del \"%~f0\" & exit", message = "start runs a batch file under cmd /K; without the exit the console stays")
+    }
+
+    @Test
+    fun `windows - the helper is started by its bare name from its own folder`() {
+        // %TEMP% is under the user's profile, and a profile with a & in its name split the command.
+        val helper = Path.of("C:\\Users\\Tom & Jerry\\AppData\\Local\\Temp\\omega-update-4242.cmd")
+        val command = WindowsInstaller.launchCommand(helper)
+        assertEquals(listOf("cmd.exe", "/c", "start", "\"\"", "/min", "omega-update-4242.cmd"), command)
+        assertTrue(command.none { it.contains('\\') || it.contains('&') }, "no path crosses the command line: $command")
     }
 
     @Test
@@ -463,5 +474,114 @@ class InstallerTest {
             deleteTree(temp)
             deleteTree(install)
         }
+    }
+
+    // ---------------------------------------------------------------- links, roots and cmd's settings
+
+    /**
+     * A directory link at [link] to [target]: a symlink where the account may make one, else a
+     * junction, which a standard Windows account can make. False when neither is possible.
+     */
+    private fun linkTo(link: Path, target: Path): Boolean {
+        if (runCatching { Files.createSymbolicLink(link, target) }.isSuccess) return true
+        if (!System.getProperty("os.name").startsWith("Windows")) return false
+        val process = ProcessBuilder("cmd.exe", "/c", "mklink", "/J", link.toString(), target.toString())
+            .redirectErrorStream(true).start()
+        process.inputStream.readAllBytes()
+        return process.waitFor() == 0 && Files.exists(link, LinkOption.NOFOLLOW_LINKS)
+    }
+
+    @Test
+    fun `windows - a link inside app or runtime is refused before anything is copied`() {
+        // robocopy /MIR removes old files through a junction in the destination, with /XJ or without:
+        // a folder with a link in it is download-only, said as About opens and again at stage.
+        for (name in WindowsInstaller.MIRRORED) {
+            val temp = tempDir()
+            val install = tempDir()
+            val outside = tempDir()
+            val link = install.resolve(name).resolve("linked")
+            try {
+                Files.writeString(outside.resolve("precious.txt"), "keep")
+                val launcher = install.resolve("OmegaPlugin.exe").also { Files.writeString(it, "old exe") }
+                for (folder in WindowsInstaller.MIRRORED) {
+                    Files.createDirectories(install.resolve(folder)).resolve("file").also { Files.writeString(it, "x") }
+                }
+                org.junit.jupiter.api.Assumptions.assumeTrue(linkTo(link, outside), "this account can make neither a symlink nor a junction")
+                assertTrue(WindowsInstaller.linkInside(install.resolve(name)))
+                assertFalse(WindowsInstaller.linkInside(install.resolve(WindowsInstaller.MIRRORED.first { it != name })))
+                val installer = WindowsInstaller(launcher, temp, 1) { error("must not run") }
+                assertEquals(WindowsInstaller.HAS_LINKS, installer.cannotApply())
+                val zip = temp.resolve("Omega-Plugin-Windows.zip")
+                writeBundleZip(zip, "OmegaPlugin")
+                val failure = runCatching { installer.stage(zip) { } }.exceptionOrNull()
+                assertTrue(failure is UpdateException, "refused for a link in $name: $failure")
+                assertEquals(WindowsInstaller.HAS_LINKS, failure.message)
+                assertTrue(stages(temp).isEmpty(), "no stage and no helper for a folder with a link in it")
+                assertEquals("keep", Files.readString(outside.resolve("precious.txt")))
+            } finally {
+                Files.deleteIfExists(link)
+                deleteTree(temp)
+                deleteTree(install)
+                deleteTree(outside)
+            }
+        }
+    }
+
+    @Test
+    fun `windows - removing a stage deletes a link in it, not what is on the other side of it`() {
+        // Files.walk descends into a junction, which Java reports as a directory: a junction inside
+        // a stage being removed had the folder it pointed at emptied. A failed unpack and the sweep
+        // of abandoned stages both remove a stage through this.
+        val stage = tempDir()
+        val outside = tempDir()
+        val link = stage.resolve("linked")
+        try {
+            Files.writeString(outside.resolve("precious.txt"), "keep")
+            Files.writeString(stage.resolve(WindowsInstaller.STAGE_MARKER), "x")
+            Files.createDirectories(stage.resolve("OmegaPlugin/app")).resolve("stale.jar").also { Files.writeString(it, "old") }
+            org.junit.jupiter.api.Assumptions.assumeTrue(linkTo(link, outside), "this account can make neither a symlink nor a junction")
+            WindowsInstaller.deleteTree(stage)
+            assertEquals("keep", Files.readString(outside.resolve("precious.txt")), "the link was removed, not followed")
+            assertFalse(Files.exists(stage, LinkOption.NOFOLLOW_LINKS), "the stage went, the link in it with it")
+        } finally {
+            Files.deleteIfExists(link)
+            deleteTree(stage)
+            deleteTree(outside)
+        }
+    }
+
+    @Test
+    fun `windows - a program at the root of a drive is refused before the write probe`() {
+        // robocopy reads "D:\" as an escaped quote and fails with 16. The root is refused instead,
+        // and ahead of isWritable, which would otherwise try to create a file there.
+        val temp = tempDir()
+        try {
+            val root = checkNotNull(temp.toAbsolutePath().root)
+            val installer = WindowsInstaller(root.resolve("OmegaPlugin.exe"), temp, 1) { error("must not run") }
+            assertEquals(WindowsInstaller.AT_ROOT, installer.cannotApply())
+            val failure = assertFailsWith<UpdateException> { installer.stage(temp.resolve("nothing.zip")) { } }
+            assertEquals(WindowsInstaller.AT_ROOT, failure.message)
+            assertTrue(stages(temp).isEmpty(), "no stage and no helper")
+        } finally {
+            deleteTree(temp)
+        }
+    }
+
+    @Test
+    fun `windows - the helper turns delayed expansion off before it reads a path`() {
+        // Under cmd /V:ON, or the registry default that means the same, "D:\Music!\OmegaPlugin" is
+        // read as "D:\Music\OmegaPlugin". The script cannot know how a user's cmd is set, so it says.
+        val script = WindowsInstaller.helperScript(
+            pid = 1,
+            source = Path.of("C:\\Users\\Pat\\AppData\\Local\\Temp\\omega-update\\OmegaPlugin"),
+            target = Path.of("D:\\Music!\\OmegaPlugin"),
+            exe = "OmegaPlugin.exe",
+            zip = Path.of("C:\\Users\\Pat\\AppData\\Local\\Temp\\Omega-Plugin-Windows.zip"),
+            expanded = Path.of("C:\\Users\\Pat\\AppData\\Local\\Temp\\omega-update"),
+        )
+        val off = script.indexOf("setlocal DisableDelayedExpansion")
+        assertTrue(off >= 0, "the script turns delayed expansion off")
+        assertTrue(off < script.indexOf("set \""), "before the first set line")
+        assertContains(script, "set \"DST=D:\\Music!\\OmegaPlugin\"", message = "the ! is written as it is; setlocal is what protects it")
     }
 }

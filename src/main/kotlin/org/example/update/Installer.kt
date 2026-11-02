@@ -22,8 +22,10 @@ package org.example.update
 import java.io.IOException
 import java.lang.ProcessBuilder.Redirect
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
@@ -246,12 +248,18 @@ class WindowsInstaller(
 
     override fun cannotApply(): String? {
         val folder = installDir ?: return Installer.NOT_FROM_BUNDLE
-        return if (isWritable(folder)) null else NOT_WRITABLE
+        // Before the write probe, which would otherwise try to create a file at the drive's root.
+        if (folder.parent == null) return AT_ROOT
+        if (!isWritable(folder)) return NOT_WRITABLE
+        if (MIRRORED.any { linkInside(folder.resolve(it)) }) return HAS_LINKS
+        return null
     }
 
     override fun downloadFolder(): Path = temp
 
     override fun stage(download: Path, progress: (String) -> Unit): () -> Unit {
+        // Asked again here, not only as About opened: this is the last gate before the helper exists.
+        cannotApply()?.let { throw UpdateException(it, reachedServer = true) }
         val target = installDir ?: throw UpdateException(Installer.NOT_FROM_BUNDLE, reachedServer = true)
         val exe = launcher!!.fileName.toString()
         progress("Unpacking…")
@@ -307,11 +315,40 @@ class WindowsInstaller(
          * line, so `D:\50% off` would be read as `D:\50 off` and every later step would act on a
          * name that is not the folder's; `%%` is read as `%`. Measured on Windows 10 in 2.0.4.
          * Nothing else needs escaping inside the quotes: `!` only matters under delayed expansion,
-         * which this script never turns on, and a `"` cannot be in a Windows path.
+         * which the script turns off before its first `set`, and a `"` cannot be in a Windows path.
          */
         fun cmdValue(path: Path): String = path.toString().replace("%", "%%")
         const val NOT_WRITABLE =
             "Could not write to the program folder, so this copy cannot replace itself."
+
+        /** `robocopy` cannot be given a drive root: `"D:\"` reads as an escaped quote and the copy fails with 16. */
+        const val AT_ROOT =
+            "This program sits at the root of a drive, where the update helper cannot copy to, so this copy " +
+                "cannot replace itself."
+
+        /** `robocopy /MIR` removes old files through a junction in the destination, and `/XJ` does not stop it. */
+        const val HAS_LINKS =
+            "The program's app or runtime folder has a link in it, which the update would follow when it " +
+                "removes old files, so this copy cannot replace itself."
+
+        /** A symlink, or a junction: Windows reports a junction as a directory *and* as "other". */
+        private fun isLink(attrs: BasicFileAttributes): Boolean = attrs.isSymbolicLink || attrs.isOther
+
+        private fun attributes(path: Path): BasicFileAttributes? =
+            runCatching { Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
+
+        private fun children(folder: Path): List<Path> = runCatching { Files.list(folder).use { it.toList() } }.getOrDefault(emptyList())
+
+        /**
+         * Whether [path] is a link or holds one anywhere beneath it. The mirror would follow a
+         * junction in the installed folder and delete whatever is on the other side of it — measured
+         * on Windows 10 in 2.0.7, with and without `/XJ` — so a folder with one in it is not touched.
+         */
+        fun linkInside(path: Path): Boolean {
+            val attrs = attributes(path) ?: return false
+            if (isLink(attrs)) return true
+            return attrs.isDirectory && children(path).any(::linkInside)
+        }
 
         /** Proof by doing: create and delete a file. Permissions on Windows are not worth reading. */
         fun isWritable(folder: Path): Boolean {
@@ -369,6 +406,11 @@ class WindowsInstaller(
          * program that was still open, and the copy failed. Measured on Windows 10 in 1.9.2, from a
          * shell with Git's tools first on the PATH.
          *
+         * `setlocal DisableDelayedExpansion` comes before the first `set`, because a `cmd` whose
+         * registry default turns delayed expansion on reads `D:\Music!\OmegaPlugin` as
+         * `D:\Music\OmegaPlugin`, and nothing the program writes can know how a user's `cmd` is set.
+         * Measured on Windows 10 in 2.0.7 with `cmd /V:ON`.
+         *
          * Waits with `tasklist` and `ping` rather than PowerShell's `Wait-Process`, so the script
          * runs on any Windows with nothing but `cmd`. `app` and `runtime` are mirrored, so a file an
          * older version shipped and this one does not is removed rather than left for ever; nothing
@@ -376,13 +418,15 @@ class WindowsInstaller(
          * there would delete anything they keep beside the exe. `robocopy` exit codes below 8 are
          * success. On a copy that failed the old
          * program is started again if it still can be, and the zip is shown in Explorer so the user
-         * can unzip it by hand. The last line is the idiom for a batch file deleting itself.
+         * can unzip it by hand. The last line is the idiom for a batch file deleting itself, with
+         * `exit` after it because `start` ran this file under `cmd /K` — see [launchCommand].
          */
         fun helperScript(pid: Long, source: Path, target: Path, exe: String, zip: Path, expanded: Path): String =
             """
             @echo off
             rem Omega-Plugin update helper. Written by the program; removes itself when done.
             chcp 65001 >nul
+            setlocal DisableDelayedExpansion
             set "PID=$pid"
             set "SRC=${cmdValue(source)}"
             set "DST=${cmdValue(target)}"
@@ -410,14 +454,28 @@ class WindowsInstaller(
             start "" "%SystemRoot%\explorer.exe" /select,"%ZIP%"
             start "" "%DST%\$exe"
             :end
-            (goto) 2>nul & del "%~f0"
+            (goto) 2>nul & del "%~f0" & exit
             """.trimIndent().replace("\n", "\r\n") + "\r\n"
 
+        /**
+         * `start "" /min omega-update-<n>.cmd`, run from the helper's folder: a new, minimised
+         * console that outlives this process. The empty title is `start`'s own quirk — its first
+         * quoted argument is the window title, so a quoted path given first would be taken as one.
+         *
+         * The file is named bare and found through the working directory, so no path crosses a
+         * command line: `%TEMP%` is under the user's profile, and a profile named `Tom & Jerry` put a
+         * `&` in it that `cmd` read as the end of the command, which ended in a "Windows cannot
+         * find" dialog and no restart. `start` runs a batch file with `cmd /K`, which keeps the
+         * console open once the script ends, so the script's last line ends with `exit`; before
+         * that, a minimised "Omega-Plugin update" window stayed behind after every update since
+         * 1.9.2. (`start "" /min cmd.exe /c <helper>` would avoid `/K`, but on Windows 10 it ran
+         * nothing, with the working directory right and no error.) Measured in 2.0.7.
+         */
+        fun launchCommand(helper: Path): List<String> =
+            listOf("cmd.exe", "/c", "start", "\"\"", "/min", helper.fileName.toString())
+
         private fun startHelper(helper: Path) {
-            // `start "" /min <helper>`: a new, minimised console that outlives this process. The
-            // empty title is `start`'s own quirk — its first quoted argument is the window title,
-            // so a quoted path given first would be taken as one.
-            val builder = ProcessBuilder("cmd.exe", "/c", "start", "\"\"", "/min", helper.toString())
+            val builder = ProcessBuilder(launchCommand(helper))
                 .directory(helper.parent.toFile())
                 .redirectOutput(Redirect.DISCARD)
                 .redirectError(Redirect.DISCARD)
@@ -428,11 +486,18 @@ class WindowsInstaller(
             }
         }
 
-        private fun deleteTree(folder: Path) {
-            if (!Files.exists(folder)) return
-            Files.walk(folder).use { paths ->
-                paths.sorted(Comparator.reverseOrder()).forEach { runCatching { Files.deleteIfExists(it) } }
-            }
+        /**
+         * Removes [path] and everything under it, going down into real folders only. `Files.walk`
+         * does not follow a symlink but does descend into a junction, which Java reports as a
+         * directory: measured on Windows 10 in 2.0.7, where a junction planted in a stage folder
+         * had the folder it pointed at emptied when the stage was removed. A link is deleted as the
+         * one entry it is. Used for a stage whose unpacking failed, and by [Leftovers.sweepStages]
+         * for a stage the program died before installing.
+         */
+        fun deleteTree(path: Path) {
+            val attrs = attributes(path) ?: return
+            if (attrs.isDirectory && !isLink(attrs)) children(path).forEach(::deleteTree)
+            runCatching { Files.deleteIfExists(path) }
         }
     }
 }

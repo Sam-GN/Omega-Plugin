@@ -1,6 +1,7 @@
 @echo off
 rem Omega-Plugin update helper. Written by the program; removes itself when done.
 chcp 65001 >nul
+setlocal DisableDelayedExpansion
 set "PID=4242"
 set "SRC=C:\Users\Pat Smith\AppData\Local\Temp\omega-update\OmegaPlugin-1.8.1-beta"
 set "DST=C:\Users\Pat Smith\Desktop\OmegaPlugin-1.8.0-beta"
@@ -28,4 +29,4 @@ goto end
 start "" "%SystemRoot%\explorer.exe" /select,"%ZIP%"
 start "" "%DST%\OmegaPlugin.exe"
 :end
-(goto) 2>nul & del "%~f0"
+(goto) 2>nul & del "%~f0" & exit

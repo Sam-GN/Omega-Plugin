@@ -100,7 +100,8 @@ object Leftovers {
             if (Files.isDirectory(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
                 Files.isRegularFile(entry.resolve(WindowsInstaller.STAGE_MARKER))
             ) {
-                deleteTree(entry)
+                // The installer's, not this file's: it stops at a junction, which `Files.walk` would enter.
+                WindowsInstaller.deleteTree(entry)
                 if (!Files.exists(entry)) removed++
             } else if (name.endsWith(".cmd") && Files.isRegularFile(entry, java.nio.file.LinkOption.NOFOLLOW_LINKS) && isHelper(entry)) {
                 if (runCatching { Files.delete(entry) }.isSuccess) removed++

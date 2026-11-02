@@ -9,6 +9,38 @@ unverified, it says so.
 
 ---
 
+## [2.0.7-beta] — 2026-11-02
+
+### Fixed — three more ways an update could have touched the wrong files
+
+A third reading of every place the updater deletes, each case tried on a Windows machine rather than
+reasoned about:
+
+- **A link inside the program folder.** `robocopy /MIR` removes old files through a junction in the
+  folder it is mirroring, so a junction under `app` or `runtime` pointing somewhere else would have
+  had the other side emptied, and its `/XJ` switch does not stop it. Java's own tree walk goes down
+  into a junction too, so one inside an unpacked update would have had its target emptied when that
+  folder was removed. A program folder with a link anywhere under `app` or `runtime` is now
+  download-only and the line says why, and an unpacked update is removed without following a link
+  inside it.
+- **A `!` in the path.** A `cmd` whose registry default turns delayed expansion on reads
+  `D:\Music!\OmegaPlugin` as `D:\Music\OmegaPlugin`. The helper now turns it off before its first
+  line that names a path.
+- **A program at the root of a drive.** `robocopy` reads `"D:\"` as an escaped quote and fails with
+  code 16, so `app` and `runtime` would have been refilled and the files beside the exe left old.
+  Such a copy is download-only.
+
+Two more things the same run turned up, not about deleting. The helper was started by its full path,
+and a Windows account named with a `&`, such as `Tom & Jerry`, puts one in the temp folder: `cmd`
+read it as the end of the command, a "Windows cannot find" box came up and the program did not
+restart. It is now started by name from its own folder, so no path crosses a command line. And the
+minimised console the helper runs in never closed: `start` runs a batch file under `cmd /K`, which
+keeps the window once the script ends, so every update since 1.9.2 left an "Omega-Plugin update"
+window in the taskbar. The script now ends with `exit`. Checked from folders named `a & b`,
+`Music! & 50% (x)` and `José (x)`: the script ran, deleted itself and left no window.
+
+---
+
 ## [2.0.6-beta] — 2026-11-02
 
 ### Fixed — nothing you keep is written over or lost without asking
@@ -67,8 +99,8 @@ make one, as the installer's already is. Nothing a user sees changes.
 Two guards on the Windows helper, from reading every place it deletes. A bundle whose `app` or
 `runtime` folder is empty is refused before the helper is written, because robocopy mirrors an
 empty folder by emptying the other one and calls that success. And a `%` in any path is written as
-`%%`, because `cmd` drops a lone one from a batch file, so `D:(% off` would have been read as
-`D:( off` and every later step would have acted on a name that is not the folder's. Both measured
+`%%`, because `cmd` drops a lone one from a batch file, so `D:\50% off` would have been read as
+`D:\50 off` and every later step would have acted on a name that is not the folder's. Both measured
 on this machine.
 
 The Windows side of 2.0.0 to 2.0.3 was run on Windows for the first time. An update through the About

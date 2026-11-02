@@ -618,7 +618,22 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   in 2.0.4: a `%` in a path is written `%%`, since `cmd` drops a lone one from a batch file and the
   helper would act on a name that is not the folder's; and `stage` refuses a bundle whose `app` or
   `runtime` is empty, because `robocopy /MIR` from an empty folder empties the other one and exits
-  2, a success. A missing source folder is refused with 16 and purges nothing.
+  2, a success. A missing source folder is refused with 16 and purges nothing. Four more in 2.0.7,
+  each measured on Windows 10: `robocopy /MIR` removes old files through a junction inside the destination
+  and `/XJ` does not stop it, so a program folder with a link anywhere under `app` or `runtime` is
+  download-only (`HAS_LINKS`, asked as About opens and again in `stage`); `Files.walk` descends into
+  a junction, which Java reports as a directory, so `WindowsInstaller.deleteTree` goes down into
+  real folders only and deletes a link as one entry, and `Leftovers.sweepStages` removes an
+  abandoned stage through it; the helper runs `setlocal DisableDelayedExpansion` before its
+  first `set`, because a `cmd` whose registry default expands late reads `D:\Music!\x` as
+  `D:\Music\x`; and a program at a drive root is download-only (`AT_ROOT`), because `robocopy`
+  reads `"D:\"` as an escaped quote and fails with 16. The same run found two things about the
+  launch, `launchCommand`: the helper is started by its bare name from its own folder, because a
+  `&` in `%TEMP%` (an account called `Tom & Jerry`) split the command and ended in a "Windows
+  cannot find" box; and the script's last line ends with `exit`, because `start` runs a batch file
+  under `cmd /K` and every update since 1.9.2 had left a minimised "Omega-Plugin update" console
+  behind. `start "" /min cmd.exe /c <helper>` would dodge `/K` but ran nothing on Windows 10,
+  with the working directory right and no error; do not go back to it without a marker test.
 - **Linux replaces the AppImage at its own path, after running the new one.** `APPIMAGE` names the
   running image, resolved through any symlink. The download lands beside it under a hidden staged
   name (`Installer.stagedName`), so nothing watching the folder takes it for an install, and `stage`
@@ -646,8 +661,8 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   an inherited `APPDIR` is not ours, and the copy gets Download.
 - **Where it cannot apply** — no `jpackage.app-path` or `APPIMAGE`, a path the locale cannot
   represent (`UnreadablePathInstaller`, which `Updates.guarded` falls back to, because `UpdatePanel`
-  builds the installer as About opens and a throw there means no dialog at all), or an unwritable
-  folder — the
+  builds the installer as About opens and a throw there means no dialog at all), an unwritable
+  folder, or on Windows a drive root or a link under `app` or `runtime` — the
   button reads Download, the verified file goes to `Updates.downloadsFolder()` and the line says
   why. Never a silent no-op.
 - **`-Domega.update.source=<folder>`** answers the requests and the download from canned files
@@ -858,7 +873,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-485 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+490 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`
