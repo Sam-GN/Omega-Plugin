@@ -69,6 +69,47 @@ class PitchTrackerTest {
         }
     }
 
+    /** What a bass, a five-string bass, a seven-string and a dropped guitar put under the low E. */
+    private val lowNotes = listOf(
+        Triple("five-string bass B0", 30.8677f, GuitarString.B3),
+        Triple("bass E1", 41.2034f, GuitarString.E2),
+        Triple("bass A1", 55f, GuitarString.A2),
+        Triple("seven-string B1", 61.7354f, GuitarString.B3),
+        Triple("drop D2", 73.4162f, GuitarString.D3),
+        Triple("bass G2", 97.9989f, GuitarString.G3),
+    )
+
+    @Test
+    fun `a bass, a five-string bass and a seven-string read their strings by name, within a cent`() {
+        for (rate in rates) {
+            val tracker = PitchTracker(rate)
+            for ((name, hz, string) in lowNotes) {
+                for ((shape, signal) in listOf("sine" to sine(hz, rate, tracker.windowSize), "sawtooth" to sawtooth(hz, rate, tracker.windowSize))) {
+                    val heard = tracker.estimate(signal, tracker.windowSize)
+                    assertTrue(heard > 0f, "$name as $shape at $rate Hz: nothing heard")
+                    assertTrue(abs(centsBetween(heard, hz)) < 1f, "$name as $shape at $rate Hz read $heard, ${centsBetween(heard, hz)} cents off")
+                    assertEquals(string, GuitarString.nearest(heard), "$name is named by its pitch class")
+                    assertEquals(string.label, GuitarString.nearest(heard).label)
+                    assertTrue(abs(GuitarString.nearest(heard).cents(heard)) < 1f, "folded into the string's octave: ${GuitarString.nearest(heard).cents(heard)}")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `cents are folded into one octave, so a bass E thirty cents flat reads E minus thirty`() {
+        val bassE = shifted(41.2034f, -30f)
+        assertEquals(GuitarString.E2, GuitarString.nearest(bassE))
+        assertEquals(-30f, GuitarString.E2.cents(bassE), 0.01f)
+        val lowB = shifted(30.8677f, 40f)
+        assertEquals(GuitarString.B3, GuitarString.nearest(lowB))
+        assertEquals(40f, GuitarString.B3.cents(lowB), 0.01f)
+        // Never beyond half an octave either way.
+        for (hz in listOf(28f, 35f, 50f, 70f, 90f, 125f, 170f, 220f, 300f, 359f)) {
+            assertTrue(abs(GuitarString.nearest(hz).cents(hz)) <= 300f, "$hz Hz is within 300 cents of some string")
+        }
+    }
+
     @Test
     fun `a string twenty cents flat is still that string, and reads twenty cents flat`() {
         val rate = 48_000f
@@ -125,25 +166,35 @@ class PitchTrackerTest {
     }
 
     @Test
-    fun `the window is a fixed time whatever the rate`() {
+    fun `the window is about the same time whatever the rate, and the search runs reduced`() {
+        val at44 = PitchTracker(44_100f).windowSize / 44_100f
         val at48 = PitchTracker(48_000f).windowSize / 48_000f
         val at96 = PitchTracker(96_000f).windowSize / 96_000f
-        assertEquals(at48, at96, 0.001f)
-        assertTrue(at48 in 0.05f..0.1f, "about 70 ms: $at48 s")
+        assertEquals(at48, at96, 0.01f)
+        assertEquals(at48, at44, 0.01f)
+        assertTrue(at48 in 0.15f..0.25f, "about 180 ms: $at48 s")
+        assertEquals(2, PitchTracker(44_100f).factor)
+        assertEquals(2, PitchTracker(48_000f).factor)
+        assertEquals(3, PitchTracker(96_000f).factor)
     }
 
     @Test
     fun `the string name holds until the pitch is clearly nearer another`() {
+        // Named by pitch class, the strings are two or three semitones apart: A and B are 200 cents.
         val a = GuitarString.A2
-        // 200 cents above A: A is nearest, by a wide margin.
-        assertEquals(a, GuitarString.choose(shifted(a.hz, 200f), null))
-        // 240 above A: D is only 20 cents nearer than A, so the name holds.
-        assertEquals(a, GuitarString.choose(shifted(a.hz, 240f), a))
-        // 280 above A: D is 60 cents nearer, so it switches.
-        assertEquals(GuitarString.D3, GuitarString.choose(shifted(a.hz, 280f), a))
-        // Back to 240 above A, now from D: it holds D for the same reason.
-        assertEquals(GuitarString.D3, GuitarString.choose(shifted(a.hz, 240f), GuitarString.D3))
-        // With nothing heard before, 240 above A is simply the nearest.
-        assertEquals(a, GuitarString.choose(shifted(a.hz, 240f), null))
+        val b = GuitarString.B3
+        // 90 cents above A: A is nearest.
+        assertEquals(a, GuitarString.choose(shifted(a.hz, 90f), null))
+        // 110 above A: B is only 20 cents nearer than A, so the name holds.
+        assertEquals(a, GuitarString.choose(shifted(a.hz, 110f), a))
+        // 140 above A: B is 80 cents nearer, so it switches.
+        assertEquals(b, GuitarString.choose(shifted(a.hz, 140f), a))
+        // Back to 110 above A, now from B: it holds B for the same reason.
+        assertEquals(b, GuitarString.choose(shifted(a.hz, 110f), b))
+        // With nothing heard before, 110 above A is simply the nearest, which is B.
+        assertEquals(b, GuitarString.choose(shifted(a.hz, 110f), null))
+        // The two Es share a pitch class; the one in the nearer octave is named.
+        assertEquals(GuitarString.E2, GuitarString.nearest(82.4f))
+        assertEquals(GuitarString.E4, GuitarString.nearest(329.6f))
     }
 }

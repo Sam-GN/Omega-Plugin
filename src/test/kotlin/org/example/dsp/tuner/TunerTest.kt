@@ -93,16 +93,16 @@ class TunerTest {
         val tuner = Tuner()
         tuner.prepare(48_000f)
         tuner.enabled = true
-        // 260 cents above A: D is the nearest, by 20 cents, but A holds while A is the string being heard.
-        val between = GuitarString.A2.hz * Math.pow(2.0, 260 / 1200.0).toFloat()
+        // 110 cents above A: B is the nearest, by 20 cents, but A holds while A is the string being heard.
+        val between = GuitarString.A2.hz * Math.pow(2.0, 110 / 1200.0).toFloat()
         feedTone(tuner, GuitarString.A2.hz, 48_000f, 0.3f, 64)
         assertEquals(GuitarString.A2, assertNotNull(tuner.read()).string)
         feedTone(tuner, between, 48_000f, 0.3f, 64)
-        assertEquals(GuitarString.A2, assertNotNull(tuner.read()).string, "held, since D is barely nearer")
+        assertEquals(GuitarString.A2, assertNotNull(tuner.read()).string, "held, since B is barely nearer")
         feedTone(tuner, 0f, 48_000f, 0.3f, 64)
         assertNull(tuner.read(), "silence")
         feedTone(tuner, between, 48_000f, 0.3f, 64)
-        assertEquals(GuitarString.D3, assertNotNull(tuner.read()).string, "named fresh: D is the nearest")
+        assertEquals(GuitarString.B3, assertNotNull(tuner.read()).string, "named fresh: B is the nearest")
     }
 
     @Test

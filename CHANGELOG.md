@@ -9,6 +9,20 @@ unverified, it says so.
 
 ---
 
+## [2.1.1-beta] — 2026-11-02
+
+### Added — the tuner reads a bass, a five-string bass and a seven-string too
+
+Nothing to choose: the tuner now hears down to 28 Hz, under a five-string bass's low B, and names
+a note by its pitch class, so a bass E reads **E**, a five-string's B and a seven-string's B read
+**B**, and a guitar dropped to D reads **D**, with the lamps meaning what they always meant. The
+listen is a little longer, about 180 ms instead of 70, because the lowest note needs that much to
+show its period. The search runs on the input reduced to about 24 kHz and the answer is then refined
+at the full rate, so the cost stays where it was and every string, bass and guitar, still reads
+within a cent in the tests at 44.1, 48 and 96 kHz.
+
+---
+
 ## [2.1.0-beta] — 2026-11-02
 
 ### Added — a tuner

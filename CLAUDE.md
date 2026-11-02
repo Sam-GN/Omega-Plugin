@@ -557,18 +557,25 @@ the TUNE button, a `>` lamp. Added in 2.1.0. The rules it depends on:
   loop box's through-lanes and the boards, and that is a 64-float copy into a ring plus one volatile
   store, and nothing when the switch is off. The pitch is read by `Tuner.read` on `TunerStrip`'s own
   thread, twenty times a second: it takes the newest window out of the ring and hands it to
-  `PitchTracker`, a normalised autocorrelation over about 70 ms with parabolic refinement, which is a
-  few million multiplications and must never run on the audio thread or the event thread. The ring is
-  four windows long and the reader can never fall three behind during one copy. The engine's
-  allocation test runs with the tuner on.
+  `PitchTracker`, a normalised autocorrelation over about 180 ms with parabolic refinement, which is
+  a few million multiplications and must never run on the audio thread or the event thread. Since
+  2.1.1 the search runs on the input averaged down to about 24 kHz (`factor`), because the floor is
+  28 Hz for a five-string bass and the lag search grows with the rate squared; the lag found is then
+  refined at the full rate over the few lags it could stand for, which is what keeps the high E
+  inside a cent. The ring is four windows long and the reader can never fall three behind during
+  one copy. The engine's allocation test runs with the tuner on.
 - **The dry input, not the output.** An overdrive's harmonics and a reverb's tail are what make a
   pitch hard to read; the guitar alone is easy. Nothing in the chain changes while it listens, and
   the sound carries on.
-- **Standard tuning only, A at 440, nothing saved.** `GuitarString` is the six strings; the nearest
-  one names the note, and `GuitarString.choose` holds the previous name until another is nearer by
-  `HOLD_CENTS`, so a string turned towards its neighbour does not flicker. Silence forgets the name.
-  The tuner always starts off; no session, preset or config knows it exists. Any of those is a
-  feature to be asked for, not added.
+- **Standard tuning only, A at 440, nothing saved, and no instrument switch.** `GuitarString` is
+  the six strings, named by **pitch class** (2.1.1): `cents` folds the note heard into the string's
+  own octave, so a bass E, a five-string bass's B, a seven-string's B and a dropped D all read as
+  the letter they are, and nobody says what they are holding. The pitch classes are two or three
+  semitones apart, so the nearest is never more than 150 cents away; `GuitarString.choose` holds
+  the previous name until another is nearer by `HOLD_CENTS`, so a string turned towards its
+  neighbour does not flicker, and between the two Es the nearer octave is named. Silence forgets the
+  name. The tuner always starts off; no session, preset or config knows it exists. A tuning, a
+  reference pitch or a sixth-string bass under 28 Hz is a feature to be asked for, not added.
 - **It pauses what it would otherwise listen over, and gives it back.** `MainWindow.setTuner` stops
   the metronome and loop playback on the way in and starts again on the way out whatever it stopped,
   unless the player started it themselves meanwhile — `tickTuner` clears the resume flag when it
@@ -584,10 +591,11 @@ the TUNE button, a `>` lamp. Added in 2.1.0. The rules it depends on:
   beat lamps' colour and halo, not dots with glyphs beside them. `PushButton.ink` exists for the
   green letter.
 - **The tests work from the tuning, not the code.** `PitchTrackerTest` synthesises each open
-  string, a string 20 cents flat and 60 cents sharp, a sawtooth and a note whose second harmonic is
-  louder than its fundamental, at 44.1, 48 and 96 kHz, and asserts within a cent; silence, hum under
-  the gate and noise read as nothing; a DC offset changes nothing. `TunerTest` drives the ring in
-  blocks of 37, 64 and 1000. Add a tuning or a reference pitch and those are the tests to extend.
+  string, the four bass strings, the five-string's B, the seven-string's B and a drop D, a string
+  20 cents flat and 60 cents sharp, a sawtooth and a note whose second harmonic is louder than its
+  fundamental, at 44.1, 48 and 96 kHz, and asserts within a cent and the right letter; silence, hum
+  under the gate and noise read as nothing; a DC offset changes nothing. `TunerTest` drives the ring
+  in blocks of 37, 64 and 1000. Add a tuning or a reference pitch and those are the tests to extend.
 
 ### Check for updates
 
@@ -917,7 +925,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-505 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+507 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

@@ -252,8 +252,9 @@ Kept rather than deleted, because a record of what was open is part of what this
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
 - **A tuner, 2.1.0-beta.** On the rhythm row: the string heard, a lamp each way for flat and sharp,
-  orange far and green near, the letter green when in tune. Listens to the dry input off the audio
-  thread; pauses the metronome and the loops while on.
+  dimming as it closes in, the letter green when in tune. Listens to the dry input off the audio
+  thread; pauses the metronome and the loops while on. From 2.1.1 it hears down to 28 Hz and names
+  by pitch class, so a bass, a five-string bass and a seven-string read without a switch.
 - **Nothing kept is written over or lost without asking, 2.0.6-beta.** Lane saves ask before
   replacing, quitting and updating warn about unsaved lanes, recordings and downloads take free
   names, and preset names cannot steer a recording out of its folder.

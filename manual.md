@@ -707,7 +707,10 @@ stream running, because it listens to your input.
 
 1. Press **Tune** and play one open string, letting it ring.
 2. The button shows the string it hears: **E**, **A**, **D**, **G**, **B** or **E**, standard tuning
-   with A at 440 Hz. The low and the high E both read E; you know which one you played.
+   with A at 440 Hz. The low and the high E both read E; you know which one you played. A bass
+   works the same way, a five-string bass's low B and a seven-string's low B read **B**, and a
+   guitar dropped to D reads **D**: the tuner names the note, whatever octave it is in, so there is
+   nothing to tell it about your instrument.
 3. Turn the peg the way the lit lamp points. **>** lit means the string is flat and must come up;
    **<** lit means it is sharp and must come down. The lamp is at full brightness when you are more
    than half a semitone out and dims as you get closer.
