@@ -247,13 +247,10 @@ class LoopBoard(
         rows.forEach { it.syncButtons() }
         revalidate()
         repaint()
-        // The stack sizes from preferredHeightAt; a popped-out window grows or shrinks to the new
-        // lane count but keeps whatever width it was given.
+        // The stack sizes from preferredHeightAt; a popped-out window grows only when the new lane
+        // would not fit, and otherwise keeps the size the user gave it.
         parent?.revalidate()
-        (SwingUtilities.getWindowAncestor(this) as? LoopWindow)?.let { window ->
-            window.setSize(window.width, window.preferredSize.height)
-            window.validate()
-        }
+        (SwingUtilities.getWindowAncestor(this) as? LoopWindow)?.fitLanes()
     }
 
     /** Ends every recording and arm, from the stop keys or the panel closing. */

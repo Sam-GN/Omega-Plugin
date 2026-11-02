@@ -636,7 +636,8 @@ refused while a lane is recording.
 
 The pop-out icon moves the whole loop box into a window of its own, which can sit on a second screen.
 Closing that window puts the box back above the boards; it does not switch the loop off. Keys bound to
-lanes work in either window.
+lanes work in either window. The window keeps the size you give it, maximised included; it grows only
+when a new lane would not fit.
 
 ## The rhythm section
 

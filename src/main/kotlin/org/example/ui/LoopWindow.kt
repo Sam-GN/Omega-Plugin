@@ -21,7 +21,9 @@ package org.example.ui
 
 import java.awt.BorderLayout
 import java.awt.Dimension
+import java.awt.Frame
 import java.awt.Rectangle
+import java.awt.Toolkit
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import javax.swing.BorderFactory
@@ -37,6 +39,11 @@ import javax.swing.WindowConstants
  * playing, since moving a panel between windows is a change to the picture and to nothing else.
  * A frame rather than a dialog so it has a taskbar entry of its own and can live on a second
  * screen without following the main window about.
+ *
+ * The size is the user's. The window grows when it is too short to show every lane and otherwise
+ * keeps whatever height it was given, maximised included — the board sits at the top and the slack,
+ * if there is any, is below it. Until 1.8.1 every lane added or removed put the window back at the
+ * lanes' own height, which un-maximised a maximised window and shrank one made tall on purpose.
  */
 class LoopWindow(
     private val board: LoopBoard,
@@ -53,7 +60,10 @@ class LoopWindow(
         val root = JPanel(BorderLayout()).apply {
             background = Theme.BACKGROUND
             border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
-            add(board, BorderLayout.CENTER)
+            // North, not centre: a window taller than the lanes keeps them at the top, where the
+            // rows are, rather than stretching the board and opening a gap between the last lane
+            // and the transport.
+            add(board, BorderLayout.NORTH)
         }
         val shell = JPanel(BorderLayout()).apply {
             background = Theme.BACKGROUND
@@ -80,9 +90,40 @@ class LoopWindow(
         minimumSize = Dimension(560, 200)
         if (bounds != null && onScreen(bounds)) {
             setBounds(bounds)
+            // The lanes may have changed since those bounds were saved.
+            fitLanes()
         } else {
             setLocationRelativeTo(null)
         }
+    }
+
+    /**
+     * Grows the window when it is too short to show every lane; otherwise leaves it as the user
+     * sized it. Never shrinks, and a maximised window is left maximised. If the taller window would
+     * run off the bottom of the screen it is moved up by the difference, since a lane that cannot
+     * be seen is the thing this exists to prevent.
+     */
+    fun fitLanes() {
+        if ((extendedState and Frame.MAXIMIZED_VERT) != 0) return
+        val needed = preferredSize.height
+        if (height >= needed) return
+        val area = workArea()
+        val bottom = area.y + area.height
+        val top = if (y + needed > bottom) maxOf(area.y, bottom - needed) else y
+        setBounds(x, top, width, needed)
+        validate()
+    }
+
+    private fun workArea(): Rectangle {
+        val config = graphicsConfiguration
+        val bounds = config.bounds
+        val insets = Toolkit.getDefaultToolkit().getScreenInsets(config)
+        return Rectangle(
+            bounds.x + insets.left,
+            bounds.y + insets.top,
+            bounds.width - insets.left - insets.right,
+            bounds.height - insets.top - insets.bottom,
+        )
     }
 
     /** The window's place, as the settings store it. */

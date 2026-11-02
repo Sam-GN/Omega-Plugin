@@ -528,7 +528,9 @@ back. The rules it depends on:
 - **Lanes outlive everything but the process**: the panel being hidden, the pop-out, the stream
   stopping, the rate changing. Loop off stops playback with a fade and keeps the audio. The session
   stores only whether the board was on; `Config` keeps the key bindings, the popped-out window's
-  bounds and whether it was popped out at close.
+  bounds and whether it was popped out at close. The pop-out's size is the user's: `LoopWindow.fitLanes`
+  grows it only when a lane would not fit, never shrinks it, and leaves a maximised window alone
+  (1.8.1; before that every lane change reset the height).
 - **The warm-up runs the looper's paths on a throwaway instance** with tiny lanes, so the real lanes
   are untouched and the methods are compiled before the stream starts.
 - **Lane files are mono float WAV** written by `LaneFiles`, the recorder's format; loading takes

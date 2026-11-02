@@ -9,6 +9,18 @@ unverified, it says so.
 
 ---
 
+## [1.8.1-beta] — 2026-11-01
+
+### Fixed — the popped-out loop window keeps the size you give it
+
+Every lane added or removed put the pop-out back at exactly the lanes' own height, which threw away
+a height set by hand and un-maximised a maximised window. It now grows only when it is too short to
+show the new lane, by just what the lane needs, and otherwise keeps its size; removing a lane changes
+nothing. A window that would grow off the bottom of the screen is moved up instead. The board sits at
+the top of a taller window, with the spare room below it.
+
+---
+
 ## [1.8.0-beta] — 2026-10-31
 
 ### Added — Check for updates on About, the only two times the program touches the internet
