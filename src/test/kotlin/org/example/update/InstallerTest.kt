@@ -174,6 +174,52 @@ class InstallerTest {
         )
     }
 
+    // ---------------------------------------------------------------- Whose image APPIMAGE names
+
+    @Test
+    fun `APPIMAGE is ours when this runtime is inside APPDIR`() {
+        val mount = tempDir()
+        try {
+            val home = Files.createDirectories(mount.resolve("runtime"))
+            assertEquals(Path.of("/apps/Omega-Plugin-Linux.AppImage"), Updates.ownAppImage("/apps/Omega-Plugin-Linux.AppImage", mount.toString(), home.toString()))
+        } finally {
+            deleteTree(mount)
+        }
+    }
+
+    @Test
+    fun `APPIMAGE inherited from another AppImage is not ours, so it is never replaced`() {
+        val theirs = tempDir()
+        val ours = tempDir()
+        try {
+            val home = Files.createDirectories(ours.resolve("jdk"))
+            assertNull(Updates.ownAppImage("/apps/SomeOtherApp.AppImage", theirs.toString(), home.toString()))
+            // A folder whose name merely starts with the mount's is not inside it.
+            val lookalike = Files.createDirectories(Path.of(theirs.toString() + "-x").resolve("runtime"))
+            try {
+                assertNull(Updates.ownAppImage("/apps/SomeOtherApp.AppImage", theirs.toString(), lookalike.toString()))
+            } finally {
+                deleteTree(lookalike.parent)
+            }
+        } finally {
+            deleteTree(theirs)
+            deleteTree(ours)
+        }
+    }
+
+    @Test
+    fun `APPIMAGE without APPDIR, or with nothing behind it, is not ours`() {
+        val home = tempDir()
+        try {
+            assertNull(Updates.ownAppImage("/apps/x.AppImage", null, home.toString()))
+            assertNull(Updates.ownAppImage("/apps/x.AppImage", "", home.toString()))
+            assertNull(Updates.ownAppImage("/apps/x.AppImage", home.resolve("gone").toString(), home.toString()))
+            assertNull(Updates.ownAppImage(null, home.toString(), home.toString()))
+        } finally {
+            deleteTree(home)
+        }
+    }
+
     // ---------------------------------------------------------------- A path Java cannot hold
 
     @Test

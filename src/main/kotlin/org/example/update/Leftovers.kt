@@ -29,15 +29,18 @@ import java.nio.file.Path
  * Deleting is the point of this class and the danger of it, so each rule errs towards leaving a file:
  * the worst a wrong "no" costs is some disk until the next start.
  *
- * - **A download cut short.** A `.part` file, or a staged `.new` image, under the program's own name,
- *   when the program died before finishing the update. Only once nothing has touched it for
- *   [PARTIAL_AGE_MILLIS], because a second running copy may be in the middle of its own update.
+ * - **A download cut short.** A partial download or a staged `.new` image, under the hidden names only
+ *   the updater writes ([Updater.partName], [Installer.stagedName]), when the program died before
+ *   finishing the update. Never a browser's `.part`, which in Downloads can be a download of this very
+ *   program that the user has paused. Only once nothing has touched it for [PARTIAL_AGE_MILLIS],
+ *   because a second running copy may be in the middle of its own update.
  * - **Extract-and-run copies on Linux.** Without FUSE the AppImage runtime unpacks the whole program
  *   into `appimage_extracted_<hash>` in the temp folder, keyed by the image's contents, and never
  *   removes it: every version leaves 65 MB behind. Every AppImage on the machine uses that prefix,
- *   so a folder goes only if [isOurs] proves it is this program's, this user's, not the one running
- *   here and not in use by anything else. The current version's own copy stays, since the runtime
- *   reuses it at the next start.
+ *   so a folder goes only if [isOurs] proves it is this program's and this user's, it is not the one
+ *   running here, nothing has it open — as its program, its working folder or any open file — and it
+ *   is not freshly unpacked, since a copy still being unpacked for a launch has nothing open between
+ *   files. The current version's own copy stays, since the runtime reuses it at the next start.
  *
  * Touches no network and opens no device. Nothing in here may run on a diagnostic path: `--version`
  * in particular is how a new image is tested, and that must not change the machine.
@@ -55,14 +58,14 @@ object Leftovers {
         if (!LinuxPlatform.isLinux) return
         val temp = Path.of(System.getenv("TMPDIR")?.takeIf { it.isNotBlank() } ?: "/tmp")
         val own = Path.of(System.getProperty("java.home")).parent
-        val running = runningPrograms()
-        val copies = sweepExtracted(temp, own) { folder -> running.any { it.startsWith(folder) } }
+        val inUse = pathsInUse()
+        val copies = sweepExtracted(temp, own, System.currentTimeMillis()) { folder -> inUse.any { it.startsWith(folder) } }
         if (copies > 0) Log.info("update", "Removed $copies extracted copy(ies) of older versions.")
     }
 
-    /** A name only an update of this program writes: `Omega-Plugin-….part`, `.Omega-Plugin-….new`. */
+    /** A name only an update of this program writes: `.Omega-Plugin-….omega-download`, `.Omega-Plugin-….new`. */
     fun isPartial(name: String): Boolean =
-        name.removePrefix(".").startsWith(Platform.ASSET_PREFIX) && (name.endsWith(".part") || name.endsWith(".new"))
+        name.startsWith("." + Platform.ASSET_PREFIX) && (name.endsWith(Updater.PART_SUFFIX) || name.endsWith(".new"))
 
     /** Returns how many files were removed. A folder that cannot be read is simply passed over. */
     fun sweepPartials(folders: Collection<Path>, nowMillis: Long): Int {
@@ -95,27 +98,43 @@ object Leftovers {
         }.getOrDefault(false)
     }
 
-    /** Returns how many copies were removed. [own] and anything [inUse] are left alone. */
-    fun sweepExtracted(temp: Path, own: Path?, inUse: (Path) -> Boolean): Int {
+    /** Returns how many copies were removed. [own], anything [inUse] and anything unpacked recently are left alone. */
+    fun sweepExtracted(temp: Path, own: Path?, nowMillis: Long, inUse: (Path) -> Boolean): Int {
         val root = runCatching { temp.toRealPath() }.getOrNull() ?: return 0
         val mine = own?.let { path -> runCatching { path.toRealPath() }.getOrNull() }
         val found = runCatching { Files.list(root).use { it.toList() } }.getOrDefault(emptyList())
         var removed = 0
         for (folder in found) {
             if (folder == mine || !isOurs(folder) || inUse(folder)) continue
+            val age = runCatching { nowMillis - Files.getLastModifiedTime(folder).toMillis() }.getOrDefault(0L)
+            if (age < PARTIAL_AGE_MILLIS) continue
             deleteTree(folder)
             if (!Files.exists(folder)) removed++
         }
         return removed
     }
 
-    /** The executable of every process this user can see, which is every one that could use a copy of ours. */
-    private fun runningPrograms(): List<Path> =
-        Files.list(Path.of("/proc")).use { entries ->
-            entries.toList()
-                .filter { entry -> entry.fileName.toString().all { it.isDigit() } }
-                .mapNotNull { entry -> runCatching { Files.readSymbolicLink(entry.resolve("exe")) }.getOrNull() }
+    /**
+     * Everything a process this user can see is using: its program, its working and root folders,
+     * and every file it has open. Another user's processes cannot be read, and cannot be using a
+     * folder only this user can write to.
+     */
+    private fun pathsInUse(): List<Path> {
+        val found = ArrayList<Path>()
+        val processes = runCatching { Files.list(Path.of("/proc")).use { it.toList() } }.getOrDefault(emptyList())
+        for (process in processes) {
+            if (!process.fileName.toString().all { it.isDigit() }) continue
+            for (link in listOf("exe", "cwd", "root")) {
+                runCatching { found.add(Files.readSymbolicLink(process.resolve(link))) }
+            }
+            runCatching {
+                Files.list(process.resolve("fd")).use { fds ->
+                    fds.forEach { fd -> runCatching { found.add(Files.readSymbolicLink(fd)) } }
+                }
+            }
         }
+        return found
+    }
 
     /**
      * A bundled runtime holds read-only folders, which cannot be emptied until they are made writable.

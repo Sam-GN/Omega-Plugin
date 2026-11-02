@@ -251,6 +251,8 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **Update replaces only its own file, 2.0.5-beta.** A copy started from inside another AppImage no
+  longer takes that image for its own, and the clean-up keeps browser downloads and copies in use.
 - **The top bar grows when it wraps, 2.0.3-beta.** Rescan, Start and Rec stay reachable on a narrow
   window.
 - **Nothing of an old version stays, 2.0.2-beta.** Older extracted copies, files a version dropped on

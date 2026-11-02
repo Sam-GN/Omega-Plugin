@@ -571,11 +571,14 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   a suffix, then suffixes as text.
 - **Nothing of an old version stays.** `Leftovers.sweep` runs once, on a low-priority thread after
   the window is up and never on a diagnostic path: `--version` tests a new image and must change
-  nothing. It removes `Omega-Plugin-*.part` and `.Omega-Plugin-*.new` untouched for ten minutes, so a
-  second running copy keeps its download, and `appimage_extracted_<hash>` folders the runtime leaves
-  in `TMPDIR` without FUSE, one per version at 65 MB. Every AppImage uses that prefix, so one goes
-  only with this program's desktop entry and jar in it, this user's ownership, not this process's
-  and not any running process's. Each of those rules has a test saying what must survive, and the
+  nothing. It removes `.Omega-Plugin-*.omega-download` (`Updater.partName`) and `.Omega-Plugin-*.new`
+  untouched for ten minutes, so a second running copy keeps its download — never a bare `.part`,
+  which in Downloads is a browser's, possibly a paused download of this program — and
+  `appimage_extracted_<hash>` folders the runtime leaves in `TMPDIR` without FUSE, one per version at
+  65 MB. Every AppImage uses that prefix, so one goes only with this program's desktop entry and jar
+  in it, this user's ownership, not this process's, not any process's program, working folder, root
+  or open file, and not unpacked in the last ten minutes, since a launch still unpacking one holds
+  nothing open between files. Each of those rules has a test saying what must survive, and the
   tests run on Windows too, where Java names an owner `MACHINE\user`: the owner is compared by
   account name (2.0.4).
 - **What a user keeps carries no version.** `Omega-Plugin-Linux.AppImage`, the `OmegaPlugin` folder
@@ -626,6 +629,11 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   process never reads a session the old one is still writing. Apply therefore ends the process;
   check and download do not and may run while the stream runs. A running stream gets a
   `ConfirmDialog` before the download starts.
+- **`APPIMAGE` is only ours when our runtime is inside `APPDIR`** (`Updates.ownAppImage`). The
+  runtime passes both to everything the program starts, so a copy started from inside another
+  AppImage inherits that image's, and until 2.0.5 Update replaced the other program's file with this
+  one. In both runtime modes `java.home` is inside `APPDIR` (the mount, or the extracted folder);
+  an inherited `APPDIR` is not ours, and the copy gets Download.
 - **Where it cannot apply** — no `jpackage.app-path` or `APPIMAGE`, a path the locale cannot
   represent (`UnreadablePathInstaller`, which `Updates.guarded` falls back to, because `UpdatePanel`
   builds the installer as About opens and a throw there means no dialog at all), or an unwritable
@@ -840,7 +848,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-470 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+475 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

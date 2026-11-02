@@ -45,13 +45,36 @@ object Updates {
 
     fun installer(): Installer = guarded {
         when (Platform.current()) {
-            Platform.LINUX -> AppImageInstaller(System.getenv("APPIMAGE")?.takeIf { it.isNotBlank() }?.let(Path::of))
+            Platform.LINUX -> AppImageInstaller(
+                ownAppImage(System.getenv("APPIMAGE"), System.getenv("APPDIR"), System.getProperty("java.home")),
+            )
             Platform.WINDOWS -> WindowsInstaller(
                 launcher = System.getProperty("jpackage.app-path")?.takeIf { it.isNotBlank() }?.let(Path::of),
                 temp = Path.of(System.getProperty("java.io.tmpdir")),
                 pid = ProcessHandle.current().pid(),
             )
         }
+    }
+
+    /**
+     * `APPIMAGE`, but only when it is this program's own image.
+     *
+     * The runtime sets `APPIMAGE` and `APPDIR` for the program it starts, and every process that
+     * program starts inherits them. So a copy of this program started from inside another AppImage
+     * (an AppImage terminal, editor or launcher) finds *that* image in `APPIMAGE`, and Update used
+     * to replace it: another application's file overwritten with this one. The proof is the
+     * runtime this process is running on. In both of the runtime's modes it lives inside `APPDIR`,
+     * the mount or the extracted folder, and an inherited `APPDIR` is somebody else's.
+     */
+    internal fun ownAppImage(appImage: String?, appDir: String?, javaHome: String?): Path? {
+        if (appImage.isNullOrBlank() || appDir.isNullOrBlank() || javaHome.isNullOrBlank()) return null
+        val dir = runCatching { Path.of(appDir).toRealPath() }.getOrNull() ?: return null
+        val home = runCatching { Path.of(javaHome).toRealPath() }.getOrNull() ?: return null
+        if (!home.startsWith(dir)) {
+            Log.info("update", "APPIMAGE names $appImage, which this copy is not running from; it will not be replaced.")
+            return null
+        }
+        return Path.of(appImage)
     }
 
     /**

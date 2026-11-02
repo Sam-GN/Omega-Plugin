@@ -9,6 +9,27 @@ unverified, it says so.
 
 ---
 
+## [2.0.5-beta] — 2026-11-01
+
+### Fixed — Update could replace another program's file
+
+The program found its own AppImage through a setting the AppImage runtime passes down to everything
+it starts. Started from inside another AppImage, such as a terminal, an editor or a launcher shipped
+as one, it found that program's file instead, and Update replaced it with this one. It now checks
+that it is really running from the image named, and otherwise offers Download, as for any copy that
+cannot replace itself.
+
+### Fixed — two things the clean-up could remove that were not its own
+
+- **A browser's partial download.** Firefox names a download in progress `….part`, and a paused
+  download of this program in the Downloads folder had exactly the name the clean-up looked for.
+  Update's own partial files now have a hidden name no browser uses, and only those are removed.
+- **An older copy still in use.** Without FUSE, an older unpacked copy was kept only while a
+  program ran from it. It is now kept while anything has it open or uses it as its working folder,
+  and while it is freshly unpacked, in case a launch is still unpacking it.
+
+---
+
 ## [2.0.4-beta] — 2026-11-01
 
 ### Fixed — the Windows build failed on two of the leftover-sweep tests

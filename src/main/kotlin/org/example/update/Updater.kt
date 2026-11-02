@@ -68,7 +68,7 @@ class Updater(
         val reason = installer.cannotApply()
         val folder = if (reason == null) installer.downloadFolder() else Updates.downloadsFolder()
         Files.createDirectories(folder)
-        val part = folder.resolve(asset.name + ".part")
+        val part = folder.resolve(partName(asset.name))
         try {
             source.download(asset.url, part) { done, total ->
                 post { listener.progress(Updates.downloading(done, total)) }
@@ -108,6 +108,15 @@ class Updater(
     }
 
     companion object {
+        /**
+         * Hidden, and ending in a word no browser uses: a download in progress in the user's
+         * Downloads folder is `Omega-Plugin-Linux.AppImage.part` to Firefox, and [Leftovers] must be
+         * able to tell its own from that one.
+         */
+        const val PART_SUFFIX = ".omega-download"
+
+        fun partName(assetName: String): String = ".$assetName$PART_SUFFIX"
+
         const val NO_CHECKSUMS =
             "This release has no checksum list, so the download could not be verified and was deleted."
     }

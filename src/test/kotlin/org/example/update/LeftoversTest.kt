@@ -56,30 +56,49 @@ class LeftoversTest {
         Files.createDirectories(folder.resolve("lib"))
         Files.writeString(folder.resolve("lib").resolve(jar), "jar")
         Files.writeString(folder.resolve(desktop), "entry")
+        Files.setLastModifiedTime(folder, FileTime.fromMillis(old))
         return folder
     }
 
     @Test
     fun `an abandoned download and a staged image are removed`() {
-        val part = file("Omega-Plugin-Linux.AppImage.part")
+        val part = file(Updater.partName("Omega-Plugin-Linux.AppImage"))
         val staged = file(".Omega-Plugin-Linux.AppImage.new")
-        val zip = file("Omega-Plugin-2.0.0-beta-Windows.zip.part")
+        val zip = file(Updater.partName("Omega-Plugin-2.0.0-beta-Windows.zip"))
         assertEquals(3, Leftovers.sweepPartials(listOf(temp), now))
         assertFalse(Files.exists(part) || Files.exists(staged) || Files.exists(zip))
     }
 
     @Test
     fun `a download still being written is left for the copy writing it`() {
-        val part = file("Omega-Plugin-Linux.AppImage.part", now - 1000)
+        val part = file(Updater.partName("Omega-Plugin-Linux.AppImage"), now - 1000)
         assertEquals(0, Leftovers.sweepPartials(listOf(temp), now))
         assertTrue(Files.exists(part))
+    }
+
+    @Test
+    fun `a browser's partial download of this program is never ours to remove`() {
+        // Firefox's name for a download in progress, which in Downloads may be a paused one the
+        // user means to resume.
+        val browser = file("Omega-Plugin-Linux.AppImage.part")
+        val chrome = file("Omega-Plugin-Linux.AppImage.crdownload")
+        assertEquals(0, Leftovers.sweepPartials(listOf(temp), now))
+        assertTrue(Files.exists(browser) && Files.exists(chrome))
+    }
+
+    @Test
+    fun `a copy unpacked moments ago is left, in case a launch is still unpacking it`() {
+        val folder = copy()
+        Files.setLastModifiedTime(folder, FileTime.fromMillis(now - 1000))
+        assertEquals(0, Leftovers.sweepExtracted(temp, null, now) { false })
+        assertTrue(Files.exists(folder))
     }
 
     @Test
     fun `the program and anything else in its folder are left alone`() {
         val keep = listOf(
             "Omega-Plugin-Linux.AppImage", "Omega-Plugin-2.0.0-beta-Windows.zip", "notes.part", "other-app.new",
-            "Omega-Plugin-settings.txt", "Omega.part",
+            "Omega-Plugin-settings.txt", "Omega.part", "Omega-Plugin-Linux.AppImage.part", ".notes.omega-download",
         ).map { file(it) }
         assertEquals(0, Leftovers.sweepPartials(listOf(temp), now))
         assertTrue(keep.all { Files.exists(it) })
@@ -88,7 +107,7 @@ class LeftoversTest {
     @Test
     fun `a folder that does not exist costs nothing`() {
         assertEquals(0, Leftovers.sweepPartials(listOf(temp.resolve("gone")), now))
-        assertEquals(0, Leftovers.sweepExtracted(temp.resolve("gone"), null) { false })
+        assertEquals(0, Leftovers.sweepExtracted(temp.resolve("gone"), null, now) { false })
     }
 
     @Test
@@ -97,28 +116,29 @@ class LeftoversTest {
         val legal = Files.createDirectories(folder.resolve("runtime/legal/java.base"))
         Files.writeString(legal.resolve("LICENSE"), "text")
         legal.toFile().setWritable(false, false)
-        assertEquals(1, Leftovers.sweepExtracted(temp, null) { false })
+        Files.setLastModifiedTime(folder, FileTime.fromMillis(old))
+        assertEquals(1, Leftovers.sweepExtracted(temp, null, now) { false })
         assertFalse(Files.exists(folder))
     }
 
     @Test
     fun `a copy from before the jar lost its version is recognised`() {
         val folder = copy(jar = "OmegaPlugin-1.9.3-beta-all.jar")
-        assertEquals(1, Leftovers.sweepExtracted(temp, null) { false })
+        assertEquals(1, Leftovers.sweepExtracted(temp, null, now) { false })
         assertFalse(Files.exists(folder))
     }
 
     @Test
     fun `the copy this program is running from stays`() {
         val folder = copy()
-        assertEquals(0, Leftovers.sweepExtracted(temp, folder) { false })
+        assertEquals(0, Leftovers.sweepExtracted(temp, folder, now) { false })
         assertTrue(Files.exists(folder))
     }
 
     @Test
     fun `a copy another running program is using stays`() {
         val folder = copy()
-        assertEquals(0, Leftovers.sweepExtracted(temp, null) { true })
+        assertEquals(0, Leftovers.sweepExtracted(temp, null, now) { true })
         assertTrue(Files.exists(folder))
     }
 
@@ -126,7 +146,7 @@ class LeftoversTest {
     fun `another program's extracted AppImage is never touched`() {
         val other = copy(jar = "SomethingElse.jar")
         val other2 = copy("fedcba9876543210fedcba9876543210", desktop = "other-app.desktop")
-        assertEquals(0, Leftovers.sweepExtracted(temp, null) { false })
+        assertEquals(0, Leftovers.sweepExtracted(temp, null, now) { false })
         assertTrue(Files.exists(other) && Files.exists(other2))
     }
 
@@ -144,7 +164,8 @@ class LeftoversTest {
         runCatching { Files.createSymbolicLink(folder.resolve("link"), outside) }.getOrElse { e ->
             org.junit.jupiter.api.Assumptions.assumeTrue(false, "this account cannot create a symlink: ${e.message}")
         }
-        assertEquals(1, Leftovers.sweepExtracted(temp, null) { false })
+        Files.setLastModifiedTime(folder, FileTime.fromMillis(old))
+        assertEquals(1, Leftovers.sweepExtracted(temp, null, now) { false })
         assertTrue(Files.exists(outside))
     }
 }
