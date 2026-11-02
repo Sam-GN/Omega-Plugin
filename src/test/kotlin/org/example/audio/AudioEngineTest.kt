@@ -389,6 +389,28 @@ class AudioEngineTest {
         )
     }
 
+    @Test
+    fun `render with the tuner listening does not allocate, and the tuner hears the input`() {
+        val engine = engineWith(Gainer(1.5f))
+        engine.tuner.enabled = true
+        // 0.05 radians a sample at the default 44.1 kHz is 351 Hz: inside the tuner's range.
+        val input = FloatArray(256) { kotlin.math.sin(it * 0.05).toFloat() }
+        val output = FloatArray(256)
+        repeat(2_000) { engine.render(input, output, 256) }
+
+        val before = allocatedBytes()
+        if (before < 0) return
+        repeat(20_000) { engine.render(input, output, 256) }
+        val allocated = allocatedBytes() - before
+        assertTrue(
+            allocated < 64 * 1024,
+            "render() allocated $allocated bytes over 20 000 blocks with the tuner on; the callback path must not allocate",
+        )
+        val reading = assertNotNull(engine.tuner.read(), "the ring was fed the dry input")
+        assertEquals(351f, reading.hz, 1f)
+        assertEquals(1.5f * input[100], output[100], 1e-6f, "the tuner changes nothing about the sound")
+    }
+
     private fun splitEngineWithLooper(looper: Looper) = AudioEngine(
         EffectChain(listOf(Gainer(1.5f))),
         second = EffectChain(listOf(Doubler())),

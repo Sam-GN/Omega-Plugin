@@ -868,6 +868,10 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
         engine.rhythm.level = 0f
         engine.rhythm.start()
         println("rhythm  : ${engine.rhythm.pattern.name} + click at 240 BPM, silent")
+        // The tuner's share of the callback is one copy of the input a block; on, so it is in the
+        // number. Nothing reads the ring here — the reading is the UI's thread, not the callback's.
+        engine.tuner.enabled = true
+        println("tuner   : listening to the input")
     }
     // The lanes, now that `prepare` has sized them for the device's rate. The fourth is armed first:
     // with no loop yet it starts recording at the next callback and runs for the whole minute. The

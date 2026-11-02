@@ -161,6 +161,8 @@ check — see "Check for updates" below. The three:
   - **`dsp/loop/`** — the loop box. `Looper` is four `Lane`s and one playhead, driven by three calls
     the engine makes around the chain each block; also not an `AudioProcessor`, because it touches
     the signal in two places. See "Loop mode" below.
+  - **`dsp/tuner/`** — the tuner. `Tuner` is a ring the callback copies the dry input into and a
+    `PitchTracker` a UI thread reads it through; it touches no audio at all. See "The tuner" below.
 - **`ui/`** — Swing. `Knob`, `ToggleSwitch`, `LevelMeter` and `BeatLamps` are custom-painted
   `JComponent`s; `EffectPanel` builds one pedal from any `AudioProcessor` by reflecting over its
   `parameters` list. `Board` is one pedal board — its effect instances, its `EffectChain`, its
@@ -546,6 +548,47 @@ back. The rules it depends on:
   anything the JDK decodes, mixes to mono, keeps the first minute and resamples to the stream's rate
   off the audio thread. Nothing sampled ships; a lane is always the user's own audio.
 
+### The tuner
+
+`dsp/tuner/`, shown by `ui/TunerStrip` at the end of the rhythm row, right of the `⋮`: a `<` lamp,
+the TUNE button, a `>` lamp. Added in 2.1.0. The rules it depends on:
+
+- **The callback only copies.** `AudioEngine.render` calls `Tuner.feed` on the dry input, before the
+  loop box's through-lanes and the boards, and that is a 64-float copy into a ring plus one volatile
+  store, and nothing when the switch is off. The pitch is read by `Tuner.read` on `TunerStrip`'s own
+  thread, twenty times a second: it takes the newest window out of the ring and hands it to
+  `PitchTracker`, a normalised autocorrelation over about 70 ms with parabolic refinement, which is a
+  few million multiplications and must never run on the audio thread or the event thread. The ring is
+  four windows long and the reader can never fall three behind during one copy. The engine's
+  allocation test runs with the tuner on.
+- **The dry input, not the output.** An overdrive's harmonics and a reverb's tail are what make a
+  pitch hard to read; the guitar alone is easy. Nothing in the chain changes while it listens, and
+  the sound carries on.
+- **Standard tuning only, A at 440, nothing saved.** `GuitarString` is the six strings; the nearest
+  one names the note, and `GuitarString.choose` holds the previous name until another is nearer by
+  `HOLD_CENTS`, so a string turned towards its neighbour does not flicker. Silence forgets the name.
+  The tuner always starts off; no session, preset or config knows it exists. Any of those is a
+  feature to be asked for, not added.
+- **It pauses what it would otherwise listen over, and gives it back.** `MainWindow.setTuner` stops
+  the metronome and loop playback on the way in and starts again on the way out whatever it stopped,
+  unless the player started it themselves meanwhile — `tickTuner` clears the resume flag when it
+  sees the thing running — or the stream stopped under it, which stops the transport anyway. It is
+  refused while a take or a lane records, with the status line saying so; off is always allowed.
+  Esc turns it off from anywhere, through a `KeyEventDispatcher` like the loop board's, never while
+  typing in a field.
+- **The display is the strip's business.** `TunerStrip.tick`, from the meter timer: the letter,
+  `>` lit for flat and `<` for sharp, always in `ACCENT`, full beyond `FAR_CENTS` and dimmer with
+  distance inside it; the letter in `GOOD` after `IN_TUNE_RUN` readings inside `IN_TUNE_CENTS`, and
+  TUNE again after `HOLD_NANOS` of nothing heard. Green means done and nothing else: a green lamp
+  beside an orange one was tried and read as two verdicts. The lamps are chevrons painted in the
+  beat lamps' colour and halo, not dots with glyphs beside them. `PushButton.ink` exists for the
+  green letter.
+- **The tests work from the tuning, not the code.** `PitchTrackerTest` synthesises each open
+  string, a string 20 cents flat and 60 cents sharp, a sawtooth and a note whose second harmonic is
+  louder than its fundamental, at 44.1, 48 and 96 kHz, and asserts within a cent; silence, hum under
+  the gate and noise read as nothing; a DC offset changes nothing. `TunerTest` drives the ring in
+  blocks of 37, 64 and 1000. Add a tuning or a reference pitch and those are the tests to extend.
+
 ### Check for updates
 
 `org.example.update`, built in 1.8.0 from `docs/update-check.md`. About has a **Check for updates**
@@ -874,7 +917,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-490 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+505 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

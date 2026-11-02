@@ -588,6 +588,18 @@ class MainWindow : JFrame("Omega-Plugin") {
         toolTipText = "Rhythm settings"
     }
 
+    /** The tuner, at the end of the row: a lamp, the button, a lamp. See [toggleTuner]. */
+    private val tunerStrip = TunerStrip(engine.tuner) { toggleTuner() }
+
+    private var tunerOn = false
+
+    /**
+     * What the tuner paused when it came on and will start again when it goes off — unless the
+     * player starts it themselves in between, which [tickTuner] notices and takes as their decision.
+     */
+    private var resumeRhythm = false
+    private var resumeLoops = false
+
     /** ⋮ settings. Plain fields rather than a class, since each one is a single boolean. */
     private var recordTwin = false
     private var countInEnabled = false
@@ -610,6 +622,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         meter.update(engine.outputLevel)
         beatLamps.update(rhythm.displayBeat, rhythm.beatSerial)
         pollCountIn()
+        if (tunerOn) tickTuner()
         if (recorder != null && rhythm.isRunning) rhythmPlayedDuringTake = true
         if (tick++ % 10 == 0) updateTransport()
         // Every 60 s, and only when a counter actually moved. The complaint this answers is "it was
@@ -620,6 +633,10 @@ class MainWindow : JFrame("Omega-Plugin") {
     }
 
     init {
+        // Esc turns the tuner off from anywhere in the program, as it stops a recording. Through the
+        // focus manager rather than a key binding so it works whichever component has focus, and
+        // never while typing in a field, where Esc means what the field says it means.
+        java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher { e -> escapeTuner(e) }
         defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
         // The window draws its own chrome, so the OS draws none. Must be set before pack() makes
         // the frame displayable.
@@ -1078,9 +1095,84 @@ class MainWindow : JFrame("Omega-Plugin") {
                     isOpaque = false
                     add(playButton)
                     add(rhythmMenuButton)
+                    // The tuner last, beside the transport's controls: it pauses them while it listens.
+                    add(tunerStrip)
                 }
             )
         }
+    }
+
+    // ---- the tuner -------------------------------------------------------------
+
+    /**
+     * The TUNE button. On needs the stream, since the tuner listens to the input, and is refused
+     * while anything records: a take or a lane is the player's work in progress, and the tuner would
+     * pause what the take is being played against. Off is always allowed.
+     */
+    private fun toggleTuner() {
+        if (tunerOn) {
+            setTuner(false)
+            return
+        }
+        if (!engine.isRunning) return
+        if (recorder != null || engine.pendingRecorder != null || looper.isRecording) {
+            setStatus("Finish the recording first; the tuner can wait.", Theme.BAD)
+            return
+        }
+        setTuner(true)
+    }
+
+    /**
+     * Switches the tuner, pausing the metronome and the loops on the way in and starting again on
+     * the way out whatever it paused, unless the player started it themselves meanwhile or
+     * [resume] is false, which is the stream stopping under it.
+     */
+    private fun setTuner(on: Boolean, resume: Boolean = true) {
+        if (tunerOn == on) return
+        tunerOn = on
+        if (on) {
+            resumeRhythm = rhythm.isRunning
+            if (resumeRhythm) {
+                rhythm.stop()
+                beatLamps.clear()
+                updateRhythmControls()
+            }
+            resumeLoops = looper.playing
+            if (resumeLoops) looper.playing = false
+            engine.tuner.enabled = true
+            tunerStrip.setOn(true)
+            setStatus("Tuner on: standard tuning, A at 440 Hz. Esc turns it off.", Theme.TEXT_DIM)
+        } else {
+            engine.tuner.enabled = false
+            tunerStrip.setOn(false)
+            if (resume && engine.isRunning) {
+                if (resumeRhythm && !rhythm.isRunning) {
+                    rhythm.start()
+                    updateRhythmControls()
+                }
+                if (resumeLoops && loop && !looper.playing) looper.playing = true
+            }
+            resumeRhythm = false
+            resumeLoops = false
+        }
+    }
+
+    /** From the meter timer while the tuner is on: the display, and whether the player has taken over the transport. */
+    private fun tickTuner() {
+        tunerStrip.tick()
+        if (rhythm.isRunning) resumeRhythm = false
+        if (looper.playing) resumeLoops = false
+    }
+
+    /** True when the key was Esc with the tuner on and nobody typing, so it goes no further. */
+    private fun escapeTuner(e: java.awt.event.KeyEvent): Boolean {
+        if (!tunerOn || e.id != java.awt.event.KeyEvent.KEY_PRESSED || e.keyCode != java.awt.event.KeyEvent.VK_ESCAPE) return false
+        val manager = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager()
+        if (manager.focusedWindow == null) return false
+        val owner = manager.focusOwner
+        if (owner is javax.swing.text.JTextComponent && owner.isEditable) return false
+        setTuner(false)
+        return true
     }
 
     // ---- the rhythm row's behaviour -----------------------------------------
@@ -1183,6 +1275,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         playButton.text = if (rhythm.isRunning) "Stop" else "Play"
         playButton.lit = rhythm.isRunning
         if (!streaming) beatLamps.clear()
+        tunerStrip.setAvailable(streaming)
     }
 
     /**
@@ -2655,6 +2748,9 @@ class MainWindow : JFrame("Omega-Plugin") {
     }
 
     private fun stopEngine() {
+        // The tuner has nothing to listen to without a stream, and nothing it paused comes back:
+        // the stream stopping stops the transport too.
+        setTuner(false, resume = false)
         // Before the stream goes, so the take is closed properly rather than by whatever happens to
         // notice afterwards.
         val wasRecording = recorder != null

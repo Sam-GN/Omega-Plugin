@@ -659,6 +659,7 @@ overdrive.
 | **LEVEL** | How loud the rhythm is. |
 | **Play / Stop** | Starts and stops it. Only available while the stream runs, because the click comes out of the same output as your guitar. |
 | **⋮** | A menu of things you set once. See below. |
+| **< Tune >** | The tuner. See below. |
 
 ### Feels
 
@@ -698,6 +699,30 @@ click is chosen.
 
 Tempo, signature, feel, level and these switches are remembered between sessions but are not part of
 a preset, because a tempo is not part of a sound.
+
+### The tuner
+
+At the end of the row, right of the ⋮, a `<` lamp, a **Tune** button and a `>` lamp. It needs the
+stream running, because it listens to your input.
+
+1. Press **Tune** and play one open string, letting it ring.
+2. The button shows the string it hears: **E**, **A**, **D**, **G**, **B** or **E**, standard tuning
+   with A at 440 Hz. The low and the high E both read E; you know which one you played.
+3. Turn the peg the way the lit lamp points. **>** lit means the string is flat and must come up;
+   **<** lit means it is sharp and must come down. The lamp is at full brightness when you are more
+   than half a semitone out and dims as you get closer.
+4. When the string has held within three cents for a moment, both lamps go out and the letter turns
+   green. That string is done; play the next.
+5. Press **Tune** again, or **Esc**, to switch it off.
+
+While the tuner is on, the metronome and the loops are paused so you hear only the string; switching
+it off starts them again, unless you pressed their own Play in the meantime. Your pedals stay exactly
+as they are and your sound carries on, because the tuner listens to the guitar before the pedals.
+It cannot be switched on while a take or a loop lane is recording. It always starts off when the
+program opens, and nothing about it is saved.
+
+If the button keeps reading Tune while you play, the string is too quiet or two strings are
+sounding: play one string on its own, a little harder, and mute the rest.
 
 ## Recording
 
@@ -851,7 +876,8 @@ OUT, shows the output level with a peak hold.
 ## Keyboard and footswitch
 
 - **Esc, Space or Enter** stops a loop-lane recording from anywhere in the program.
-- **Esc** also cancels a knob value you were typing, and cancels a KEY binding in progress.
+- **Esc** also switches the tuner off, cancels a knob value you were typing, and cancels a KEY
+  binding in progress.
 - **Enter** accepts a typed knob value or tempo.
 - **Shift** while dragging a knob is fine adjustment.
 - **KEY on a loop lane** binds any other key to that lane's ON. Click KEY, then press the key; the

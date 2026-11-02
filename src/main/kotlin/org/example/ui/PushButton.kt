@@ -53,12 +53,14 @@ internal fun paintPushSurface(
     hover: Boolean,
     pressed: Boolean,
     accent: Color?,
+    /** A colour for the label in place of the style's own, while enabled: the tuner's green letter. */
+    inkOverride: Color? = null,
 ) {
     g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
     val fill: Color
     val edge: Color
-    val ink: Color
+    var ink: Color
     when {
         !enabled -> {
             fill = Theme.KNOB_BODY
@@ -76,6 +78,7 @@ internal fun paintPushSurface(
             ink = if (hover || pressed) Theme.TEXT else Theme.TEXT_DIM
         }
     }
+    if (enabled && inkOverride != null) ink = inkOverride
 
     g2.color = fill
     g2.fillRoundRect(0, 0, width, height, PUSH_RADIUS, PUSH_RADIUS)
@@ -151,6 +154,14 @@ class PushButton(
             repaint()
         }
 
+    /** A colour for the label in place of the style's own, or null for the style's. See [paintPushSurface]. */
+    var ink: Color? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            repaint()
+        }
+
     init {
         font = Theme.BODY_FONT
         cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
@@ -209,7 +220,7 @@ class PushButton(
     override fun paintComponent(g: Graphics) {
         val g2 = g.create() as Graphics2D
         try {
-            paintPushSurface(g2, width, height, text, font, isEnabled, hover, pressed, accent)
+            paintPushSurface(g2, width, height, text, font, isEnabled, hover, pressed, accent, ink)
             if (lamp != null) paintLamp(g2)
         } finally {
             g2.dispose()

@@ -9,6 +9,31 @@ unverified, it says so.
 
 ---
 
+## [2.1.0-beta] — 2026-11-02
+
+### Added — a tuner
+
+At the end of the rhythm row, right of the `⋮`: a `<` lamp, a **Tune** button and a `>` lamp. Press
+Tune while the stream runs and play one string. The button shows the string it hears, `E`, `A`,
+`D`, `G`, `B` or `E` for standard tuning at A = 440 Hz, and the lamps say which way to turn the peg:
+`>` lit means the string is flat and must come up, `<` lit means it is sharp and must come down,
+and the lamp dims as you get close. When the string has sat within three cents for a moment, the
+lamps go out and the letter turns green: green means done, and nothing else here is green. Half a
+second of nothing heard and the button reads Tune again.
+
+It listens to the guitar before the pedals, so the overdrive and the reverb stay as they are and the
+sound carries on. Turning it on pauses the metronome and the loops, and turning it off starts again
+whatever it paused, unless you started it yourself in between. It cannot be switched on while a take
+or a lane is recording. Esc turns it off from anywhere, as it stops a recording. It always starts
+off, and nothing about it is saved.
+
+The listening is done off the audio thread: the callback copies the input into a ring, 64 floats a
+block, and a thread of its own reads the pitch twenty times a second by autocorrelation. Every open
+string is read within a cent in the tests, at 44.1, 48 and 96 kHz, including a note whose second
+harmonic is louder than its fundamental.
+
+---
+
 ## [2.0.9-beta] — 2026-11-02
 
 ### Changed — the manual sits beside the README

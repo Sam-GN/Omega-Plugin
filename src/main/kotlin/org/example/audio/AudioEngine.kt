@@ -23,6 +23,7 @@ import org.example.dsp.EffectChain
 import org.example.dsp.loop.Looper
 import org.example.dsp.rhythm.Feels
 import org.example.dsp.rhythm.Transport
+import org.example.dsp.tuner.Tuner
 import org.example.util.Log
 import kotlin.math.abs
 import kotlin.math.exp
@@ -73,6 +74,12 @@ class AudioEngine(
      * with the chain, for the same reason the second board is; idle, it costs a few volatile reads.
      */
     val looper: Looper? = null,
+    /**
+     * The tuner. Fed the dry input, before the loop box's through-lanes and the boards, and only
+     * while its switch is on: one copy a block and nothing more on this thread. The pitch is read on
+     * a thread of the UI's.
+     */
+    val tuner: Tuner = Tuner(),
 ) : AudioCallback {
 
     private val chains: List<EffectChain> = listOfNotNull(chain, second, post)
@@ -337,6 +344,8 @@ class AudioEngine(
         // The transport has no way to be heard without a stream, and leaving it "playing" behind a
         // stopped device would show a running PLAY button that produces nothing.
         rhythm.stop()
+        // Likewise the tuner: nothing arrives to be listened to.
+        tuner.enabled = false
         outputLevel = 0f
         outputPeakHold = 0f
         loadPercent = 0f
@@ -366,6 +375,9 @@ class AudioEngine(
         // hardcoded 44 100, so its tick oscillators and envelopes are rebuilt at the rate the driver
         // actually granted.
         rhythm.prepare(format.sampleRate.toFloat())
+        // The tuner's ring and window are sized for the rate here, on this thread, so `feed` has
+        // nothing to allocate.
+        tuner.prepare(format.sampleRate.toFloat())
         periodNanos = format.bufferFrames * 1_000_000_000L / format.sampleRate
         // ~150 ms release and ~1.5 s peak hold, expressed per callback so the ballistics stay the
         // same whether a callback is 1.45 ms or 5.8 ms.
@@ -471,6 +483,9 @@ class AudioEngine(
             warmUpRhythm(input, output, warmFrames, blocks)
             // On a throwaway looper, so the real lanes are untouched; the methods are the same.
             looper?.warmUp(output, warmFrames, blocks)
+            // The tuner's copy is small, but it is first reached by a button pressed while the
+            // stream runs, and the ring it fills is left empty afterwards.
+            tuner.warmUp(input, warmFrames, blocks)
             // Only on a pass that completed. A warm-up that threw has not proved anything about the
             // classes it never reached, and claiming otherwise would skip the retry it needs.
             warmedClasses.addAll(classes)
@@ -560,6 +575,8 @@ class AudioEngine(
 
         try {
             System.arraycopy(input, 0, output, 0, frames)
+            // The tuner hears the guitar alone: the dry input, before the lanes and the boards.
+            tuner.feed(input, frames)
             // The loop box's through-lanes join the guitar here, ahead of both boards, so a lane
             // set to play through the pedals is processed by them exactly as the guitar is.
             val loops = looper
