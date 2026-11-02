@@ -395,7 +395,9 @@ class InstallerTest {
     @Test
     fun `windows - the helper is started by its bare name from its own folder`() {
         // %TEMP% is under the user's profile, and a profile with a & in its name split the command.
-        val helper = Path.of("C:\\Users\\Tom & Jerry\\AppData\\Local\\Temp\\omega-update-4242.cmd")
+        // The folder as one piece, then the file: Linux does not read `\` as a separator, so a single
+        // Windows path string would be one long file name there and the test would fail on Linux.
+        val helper = Path.of("C:\\Users\\Tom & Jerry\\AppData\\Local\\Temp").resolve("omega-update-4242.cmd")
         val command = WindowsInstaller.launchCommand(helper)
         assertEquals(listOf("cmd.exe", "/c", "start", "\"\"", "/min", "omega-update-4242.cmd"), command)
         assertTrue(command.none { it.contains('\\') || it.contains('&') }, "no path crosses the command line: $command")

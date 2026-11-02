@@ -9,6 +9,16 @@ unverified, it says so.
 
 ---
 
+## [2.0.8-beta] — 2026-11-02
+
+### Fixed — the Linux build failed on one of 2.0.7's tests
+
+The test that the update helper is started by its bare name built its Windows path as one string,
+which Linux reads as a single file name, so it failed there and would have failed the Linux build.
+It now builds the folder and the file separately. Nothing in the program changed.
+
+---
+
 ## [2.0.7-beta] — 2026-11-02
 
 ### Fixed — three more ways an update could have touched the wrong files
