@@ -233,6 +233,37 @@ class DelayTest {
 
         assertTrue(buffer.all { it.isFinite() && abs(it) <= 1.01f }, "delay output stayed bounded")
     }
+
+    @Test
+    fun `the read head never runs off the line, at the delay times that once sent it there`() {
+        // 350.00003 ms and 500.00006 ms are a float's rounding above a whole sample at every rate
+        // here, and that is what it took: the read position went a hair negative once a cycle, and
+        // wrapping it by adding the line's length as a float rounded up to the one index the line
+        // does not have. Before 2.1.2 the delay threw at 0.35 s and 0.5 s and the sound never
+        // came back. A round number like 350 never failed, which is why it was not seen.
+        for (rate in listOf(44_100f, 48_000f, 88_200f, 96_000f, 176_400f, 192_000f)) {
+            for (ms in listOf(350.00003f, 500.00006f, 333.3333f, 1000f)) {
+                val delay = Delay()
+                delay.time.value = ms
+                delay.mix.value = 0.5f
+                delay.feedback.value = 0.35f
+                delay.prepare(rate, 256)
+                delay.reset()
+                val block = FloatArray(256)
+                var n = 0L
+                val total = (rate * 20).toLong()
+                var lastPeak = 0f
+                while (n < total) {
+                    for (i in block.indices) block[i] = (0.3 * sin(2.0 * Math.PI * 220.0 * (n + i) / rate)).toFloat()
+                    delay.process(block, block.size)
+                    n += block.size
+                    lastPeak = block.maxOf { abs(it) }
+                }
+                assertTrue(lastPeak > 0.1f, "still sounding after 20 s at $rate Hz, $ms ms: peak $lastPeak")
+                assertTrue(block.all { it.isFinite() })
+            }
+        }
+    }
 }
 
 class DrivesTest {

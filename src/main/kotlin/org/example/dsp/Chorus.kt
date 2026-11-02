@@ -120,11 +120,17 @@ class Chorus : AudioProcessor {
      * clicking at exactly the rate the LFO is running.
      */
     private fun read(line: FloatArray, size: Int, write: Int, distance: Float): Float {
-        var position = write - distance.coerceIn(1f, size - 2f)
-        if (position < 0f) position += size
-        val i0 = position.toInt()
+        // Split into a whole sample and a fraction *before* wrapping, and wrap the whole sample as
+        // an integer. Wrapping the float — `position += size` — put a tiny negative position at
+        // exactly `size`: a float near 2646 cannot hold 2645.9999, so the sum rounded up to the one
+        // index the line does not have. At 48 kHz that happened seven seconds in, every time, and
+        // because the exception left the phase and the write head where they were, every block
+        // after it threw at the same sample and the sound never came back (2.1.2).
+        val back = write - distance.coerceIn(1f, size - 2f)
+        var i0 = kotlin.math.floor(back).toInt()
+        val fraction = back - i0
+        if (i0 < 0) i0 += size
         val i1 = if (i0 + 1 >= size) 0 else i0 + 1
-        val fraction = position - i0
         return line[i0] + (line[i1] - line[i0]) * fraction
     }
 

@@ -267,6 +267,32 @@ class ChorusTest {
         assertTrue(buffer.max() <= 1.05f, "peaked at ${buffer.max()}")
         assertTrue(buffer.all { it.isFinite() })
     }
+
+    @Test
+    fun `the read head never runs off the line, however long it runs`() {
+        // At its default settings the chorus threw an index of exactly the line's length after
+        // 7.0 s at 48 kHz and 5.2 s at 96 kHz, every run: a tiny negative read position wrapped
+        // by adding the line's length rounded up to the one index the line does not have. The
+        // engine then stayed silent, because the exception left the module where it was and
+        // every block after it threw at the same sample.
+        for (rate in listOf(44_100f, 48_000f, 88_200f, 96_000f, 176_400f, 192_000f)) {
+            val chorus = Chorus()
+            chorus.prepare(rate, 256)
+            chorus.reset()
+            val block = FloatArray(256)
+            var n = 0L
+            val total = (rate * 20).toLong()
+            var lastPeak = 0f
+            while (n < total) {
+                for (i in block.indices) block[i] = (0.3 * kotlin.math.sin(2.0 * Math.PI * 220.0 * (n + i) / rate)).toFloat()
+                chorus.process(block, block.size)
+                n += block.size
+                lastPeak = block.maxOf { abs(it) }
+            }
+            assertTrue(lastPeak > 0.1f, "still sounding after 20 s at $rate Hz: peak $lastPeak")
+            assertTrue(block.all { it.isFinite() })
+        }
+    }
 }
 
 class TransientShaperTest {

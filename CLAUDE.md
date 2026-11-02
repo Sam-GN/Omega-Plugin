@@ -455,6 +455,17 @@ knows nothing about devices; that is what makes it carry over unchanged to anoth
 `Reverb` that was ~96 000 objects a second, which is how a young-generation collection becomes an
 audible dropout. Use arrays and hoist them into locals before the loop.
 
+**Wrap a delay line's read index as an integer, never as a float.** `Chorus` and `Delay` read a
+fraction of a sample behind the write head, and both once wrapped a negative read position with
+`position += size` in float. A float near 2 646 cannot hold 2 645.9999, so a tiny negative position
+rounded up to exactly `size`, the read threw, and — because the throw left the module's phase and
+write head where they were — every block after it threw at the same sample: the chorus silenced the
+program for good seven seconds after Start at 48 kHz, every time, and the delay did the same at a
+knob value such as 350.00003 ms (2.1.2). Split into `floor` and fraction first, then wrap the whole
+sample with an integer add. `ChorusTest` and `DelayTest` run both for twenty seconds at three rates
+and expect them still to be sounding. A module that throws is said once on the status line and in
+the log by `MainWindow.reportFault`, from `engine.faulted`, which nothing read before 2.1.2.
+
 Chain order is deliberate and is `Board.pedals`, which reads gate -> compressor -> eq -> gain ->
 overdrive -> amp -> nam -> ir -> fx1 -> delay -> reverb, then the board's own `level`, pinned. It matches
 conventional pedal wiring: dynamics and tone shaping ahead of the distortion, the amp capture and
@@ -925,7 +936,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-507 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+509 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

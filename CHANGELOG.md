@@ -9,6 +9,31 @@ unverified, it says so.
 
 ---
 
+## [2.1.2-beta] — 2026-11-02
+
+### Fixed — the chorus silenced the whole program after a few seconds
+
+With a Chorus in an FX slot at its default settings, the sound stopped for good a few seconds after
+Start: 7 seconds at 48 kHz, 5 at 96 kHz, 79 at 44.1 kHz, the same every time. The chorus reads its
+delay line a fraction of a sample behind the write head, and wrapped a read position that had gone
+slightly negative by adding the line's length as a floating-point number. A float near 2 646 cannot
+hold 2 645.9999, so the sum rounded up to exactly the line's length, the one index the line does not
+have, and the read threw. The engine fills silence when a pedal throws, and because the throw left
+the chorus where it was, every block after it threw at the same sample and the silence never ended.
+The read position is now split into a whole sample and a fraction before it is wrapped, and the whole
+sample is wrapped as an integer, which cannot round.
+
+The Delay had the same wrap, and failed the same way for a delay time whose fraction of a sample fell
+within a float's rounding of a whole one, which the knob can give: 350.00003 ms failed at 0.35 s,
+at every rate. Fixed the same way. Each has a test that runs it for twenty seconds at 44.1, 48 and
+96 kHz and expects it still to be sounding, and the delay's runs at the times that failed.
+
+Two more things from the same fault. A pedal that throws in the callback is now said on the status
+line and in the log, once, with the exception's name, where before the player got silence and no
+word why. And the manual's "When something is wrong" has an entry for it.
+
+---
+
 ## [2.1.1-beta] — 2026-11-02
 
 ### Added — the tuner reads a bass, a five-string bass and a seven-string too

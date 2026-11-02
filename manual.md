@@ -926,6 +926,12 @@ nothing, the output device or the headphone socket is wrong. If it does not move
 **The sound is clean when it should be distorted, or distorted when it should be clean.** Look at
 which pedals are grey. The eye may be hiding some.
 
+**The sound stopped while you were playing, and the status line says a pedal failed.** A pedal hit
+a fault inside the program, and the program went silent rather than play noise. Press Stop, then
+Start, and the sound is back. The line names the fault; please report it with the pedal and the
+settings you had, because it is a bug in the program, not in your setup. Versions before 2.1.2 had
+one of these in the Chorus and the Delay, and said nothing.
+
 **The interface is not in the list.** Press Rescan. Under Java Sound Rescan cannot see devices
 plugged in after the program started; restart the program. Under ASIO, make sure no other program
 has the interface open.

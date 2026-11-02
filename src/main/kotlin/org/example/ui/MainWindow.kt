@@ -615,6 +615,9 @@ class MainWindow : JFrame("Omega-Plugin") {
     /** Last logged (xruns, deadlineMisses), so an unchanged stream costs no lines. */
     private var lastHealth = 0 to 0
 
+    /** The chain fault already put on the status line, so it is said once rather than thirty times a second. */
+    private var reportedFault: String? = null
+
     /** Share of the machine this process is using. Sampled once a second however often it is read. */
     private val cpu = CpuUsage()
 
@@ -623,6 +626,7 @@ class MainWindow : JFrame("Omega-Plugin") {
         beatLamps.update(rhythm.displayBeat, rhythm.beatSerial)
         pollCountIn()
         if (tunerOn) tickTuner()
+        reportFault()
         if (recorder != null && rhythm.isRunning) rhythmPlayedDuringTake = true
         if (tick++ % 10 == 0) updateTransport()
         // Every 60 s, and only when a counter actually moved. The complaint this answers is "it was
@@ -2665,6 +2669,7 @@ class MainWindow : JFrame("Omega-Plugin") {
             // The engine zeroes its counters on start, so the baseline has to zero with them — or the
             // first snapshot of a second run compares against the first run and stays quiet.
             lastHealth = 0 to 0
+            reportedFault = null
             meterTimer.start()
             startButton.text = "Stop"
             startButton.lit = true
@@ -2732,6 +2737,20 @@ class MainWindow : JFrame("Omega-Plugin") {
                 "worst callback ${engine.worstCallbackMicros} us, " +
                 "load ${"%.0f".format(engine.loadPercent * 100)} %.",
         )
+    }
+
+    /**
+     * A module that threw in the callback. The engine fills silence and raises `faulted`, and until
+     * 2.1.2 nothing read it: the chorus threw at a line index seven seconds in and the player got
+     * silence with no word why. Said once on the status line and in the log, with the name of the
+     * exception, which is what a bug report needs.
+     */
+    private fun reportFault() {
+        val fault = engine.faulted ?: return
+        if (fault == reportedFault) return
+        reportedFault = fault
+        Log.error("audio", "A module threw in the callback: $fault. The output is silent until the stream is restarted.", null)
+        setStatus("The sound stopped: a pedal failed with $fault. Press Stop, then Start, and report it.", Theme.BAD)
     }
 
     /** Counters that have not moved since the last snapshot are not worth a line. See [meterTimer]. */

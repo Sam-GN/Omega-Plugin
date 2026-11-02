@@ -69,11 +69,16 @@ class Delay : AudioProcessor {
         for (i in 0 until count) {
             distance += (target - distance) * TIME_SMOOTHING
 
-            var read = w - distance
-            if (read < 0f) read += size
-            val i0 = read.toInt()
+            // Whole sample and fraction first, then the whole sample wrapped as an integer. The
+            // chorus had the float wrapped — `read += size` — and a tiny negative read rounded up
+            // to exactly `size`, the one index the line does not have; see `Chorus.read` (2.1.2).
+            // Here it needed a delay time whose fraction of a sample fell within a float's rounding
+            // of a whole one, which a knob value can give.
+            val back = w - distance
+            var i0 = kotlin.math.floor(back).toInt()
+            val frac = back - i0
+            if (i0 < 0) i0 += size
             val i1 = if (i0 + 1 >= size) 0 else i0 + 1
-            val frac = read - i0
             val delayed = line[i0] + (line[i1] - line[i0]) * frac
 
             val x = buffer[i]
