@@ -659,7 +659,7 @@ overdrive.
 | **LEVEL** | How loud the rhythm is. |
 | **Play / Stop** | Starts and stops it. Only available while the stream runs, because the click comes out of the same output as your guitar. |
 | **⋮** | A menu of things you set once. See below. |
-| **< Tune >** | The tuner. See below. |
+| **> Tune <** | The tuner. See below. |
 
 ### Feels
 
@@ -702,8 +702,8 @@ a preset, because a tempo is not part of a sound.
 
 ### The tuner
 
-At the end of the row, right of the ⋮, a `<` lamp, a **Tune** button and a `>` lamp. It needs the
-stream running, because it listens to your input.
+At the end of the row, right of the ⋮, a `>` lamp, a **Tune** button and a `<` lamp, both pointing
+at the button. It needs the stream running, because it listens to your input.
 
 1. Press **Tune** and play one open string, letting it ring.
 2. The button shows the string it hears: **E**, **A**, **D**, **G**, **B** or **E**, standard tuning
@@ -711,9 +711,10 @@ stream running, because it listens to your input.
    works the same way, a five-string bass's low B and a seven-string's low B read **B**, and a
    guitar dropped to D reads **D**: the tuner names the note, whatever octave it is in, so there is
    nothing to tell it about your instrument.
-3. Turn the peg the way the lit lamp points. **>** lit means the string is flat and must come up;
-   **<** lit means it is sharp and must come down. The lamp is at full brightness when you are more
-   than half a semitone out and dims as you get closer.
+3. A lit lamp points the string at the note. The left **>** lit means the string is flat and must
+   come up to it; the right **<** lit means it is sharp and must come down to it. The same as a
+   pedal or clip-on tuner: left means flat, right means sharp, the middle means in tune. The lamp
+   is at full brightness when you are more than half a semitone out and dims as you get closer.
 4. When the string has held within three cents for a moment, both lamps go out and the letter turns
    green. That string is done; play the next.
 5. Press **Tune** again, or **Esc**, to switch it off.

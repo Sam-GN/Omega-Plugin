@@ -33,11 +33,12 @@ import javax.swing.JPanel
 import kotlin.math.abs
 
 /**
- * The tuner on the rhythm row: a `<` lamp, the button, a `>` lamp.
+ * The tuner on the rhythm row: a `>` lamp, the button, a `<` lamp, both pointing at the button.
  *
  * Off, the button reads TUNE. On, it reads the string being heard — `E`, `A`, `D`, `G`, `B`, `E` —
- * and the lamps say which way to turn the peg: `>` lit means the string is flat and must come up,
- * `<` lit means it is sharp and must come down. The lamp is always the accent, full beyond
+ * and the lamps point the string towards it: the left `>` lit means the string is flat and must
+ * come up to the note, the right `<` lit means it is sharp and must come down to it (the other way
+ * round until 2.1.3, which read as the note being pushed away). The lamp is always the accent, full beyond
  * [FAR_CENTS] and dimmer the nearer the string gets, because green means one thing here: when the
  * string has sat within [IN_TUNE_CENTS] for [IN_TUNE_RUN] readings in a row, the lamps go out and
  * the letter itself turns green. Half a second
@@ -51,11 +52,11 @@ class TunerStrip(private val tuner: Tuner, onToggle: () -> Unit) : JPanel(FlowLa
 
     val button = PushButton(IDLE_TEXT, minimumWidth = 60) { onToggle() }
 
-    /** Lit when the string is sharp: turn the peg down. */
-    private val lower = Chevron(pointsLeft = true)
+    /** On the left, pointing at the button: lit when the string is flat and must come up to it. */
+    private val flat = Chevron(pointsLeft = false)
 
-    /** Lit when the string is flat: turn the peg up. */
-    private val higher = Chevron(pointsLeft = false)
+    /** On the right, pointing at the button: lit when the string is sharp and must come down to it. */
+    private val sharp = Chevron(pointsLeft = true)
 
     @Volatile
     var on: Boolean = false
@@ -72,9 +73,9 @@ class TunerStrip(private val tuner: Tuner, onToggle: () -> Unit) : JPanel(FlowLa
 
     init {
         isOpaque = false
-        add(lower)
+        add(flat)
         add(button)
-        add(higher)
+        add(sharp)
         setAvailable(false)
     }
 
@@ -135,18 +136,18 @@ class TunerStrip(private val tuner: Tuner, onToggle: () -> Unit) : JPanel(FlowLa
         button.text = reading.string.label
         button.ink = if (inTuneRun >= IN_TUNE_RUN) Theme.GOOD else null
         if (inTune) {
-            lower.set(0f, null)
-            higher.set(0f, null)
+            flat.set(0f, null)
+            sharp.set(0f, null)
             return
         }
         // One colour for "turn the peg", dimming as the string gets close; green is kept for done.
         val brightness = (distance / FAR_CENTS).coerceIn(0.3f, 1f)
         if (cents < 0f) {
-            higher.set(brightness, Theme.ACCENT)
-            lower.set(0f, null)
+            flat.set(brightness, Theme.ACCENT)
+            sharp.set(0f, null)
         } else {
-            lower.set(brightness, Theme.ACCENT)
-            higher.set(0f, null)
+            sharp.set(brightness, Theme.ACCENT)
+            flat.set(0f, null)
         }
     }
 
@@ -155,8 +156,8 @@ class TunerStrip(private val tuner: Tuner, onToggle: () -> Unit) : JPanel(FlowLa
         button.text = IDLE_TEXT
         // On and hearing nothing reads TUNE in the accent, so on is visibly not off.
         button.ink = if (on) Theme.ACCENT else null
-        lower.set(0f, null)
-        higher.set(0f, null)
+        flat.set(0f, null)
+        sharp.set(0f, null)
     }
 
     /**

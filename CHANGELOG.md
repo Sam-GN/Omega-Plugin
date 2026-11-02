@@ -9,6 +9,17 @@ unverified, it says so.
 
 ---
 
+## [2.1.3-beta] — 2026-11-02
+
+### Changed — the tuner's lamps point at the note
+
+The two lamps now face the button, `> Tune <`, and each one lit says "move towards the note": the
+left `>` lights when the string is flat and must come up, the right `<` when it is sharp and must
+come down. Until now they pointed outwards and the sharp lamp was on the left, which read as the note
+being pushed away from. Nothing else about the tuner changes.
+
+---
+
 ## [2.1.2-beta] — 2026-11-02
 
 ### Fixed — the chorus silenced the whole program after a few seconds

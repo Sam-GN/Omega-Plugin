@@ -561,8 +561,8 @@ back. The rules it depends on:
 
 ### The tuner
 
-`dsp/tuner/`, shown by `ui/TunerStrip` at the end of the rhythm row, right of the `⋮`: a `<` lamp,
-the TUNE button, a `>` lamp. Added in 2.1.0. The rules it depends on:
+`dsp/tuner/`, shown by `ui/TunerStrip` at the end of the rhythm row, right of the `⋮`: a `>` lamp,
+the TUNE button, a `<` lamp, both pointing at the button. Added in 2.1.0. The rules it depends on:
 
 - **The callback only copies.** `AudioEngine.render` calls `Tuner.feed` on the dry input, before the
   loop box's through-lanes and the boards, and that is a 64-float copy into a ring plus one volatile
@@ -595,8 +595,9 @@ the TUNE button, a `>` lamp. Added in 2.1.0. The rules it depends on:
   Esc turns it off from anywhere, through a `KeyEventDispatcher` like the loop board's, never while
   typing in a field.
 - **The display is the strip's business.** `TunerStrip.tick`, from the meter timer: the letter,
-  `>` lit for flat and `<` for sharp, always in `ACCENT`, full beyond `FAR_CENTS` and dimmer with
-  distance inside it; the letter in `GOOD` after `IN_TUNE_RUN` readings inside `IN_TUNE_CENTS`, and
+  the left `>` lit for flat and the right `<` for sharp — each points the string at the note; they
+  faced outwards with sharp on the left until 2.1.3, which read as pushing away — always in
+  `ACCENT`, full beyond `FAR_CENTS` and dimmer with distance inside it; the letter in `GOOD` after `IN_TUNE_RUN` readings inside `IN_TUNE_CENTS`, and
   TUNE again after `HOLD_NANOS` of nothing heard. Green means done and nothing else: a green lamp
   beside an orange one was tried and read as two verdicts. The lamps are chevrons painted in the
   beat lamps' colour and halo, not dots with glyphs beside them. `PushButton.ink` exists for the
