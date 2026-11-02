@@ -338,4 +338,57 @@ class InstallerTest {
         assertContains(script, "start \"\" \"%DST%\\OmegaPlugin.exe\"")
         assertContains(script, "(goto) 2>nul & del \"%~f0\"")
     }
+
+    @Test
+    fun `windows - a percent sign in a path reaches cmd doubled, so it is not dropped`() {
+        // cmd drops a lone % from a batch file's line: "D:\50% off" would be read as "D:\50 off".
+        val script = WindowsInstaller.helperScript(
+            pid = 1,
+            source = Path.of("C:\\Users\\100%\\AppData\\Local\\Temp\\omega-update\\OmegaPlugin"),
+            target = Path.of("D:\\50% off\\OmegaPlugin"),
+            exe = "OmegaPlugin.exe",
+            zip = Path.of("C:\\Users\\100%\\AppData\\Local\\Temp\\Omega-Plugin-2.0.4-beta-Windows.zip"),
+            expanded = Path.of("C:\\Users\\100%\\AppData\\Local\\Temp\\omega-update"),
+        )
+        assertContains(script, "set \"DST=D:\\50%% off\\OmegaPlugin\"")
+        assertContains(script, "set \"SRC=C:\\Users\\100%%\\AppData\\Local\\Temp\\omega-update\\OmegaPlugin\"")
+        assertContains(script, "set \"STAGE=C:\\Users\\100%%\\AppData\\Local\\Temp\\omega-update\"")
+        assertFalse(Regex("""set "[A-Z]+=[^"]*(?<!%)%(?!%)[^"]*"""").containsMatchIn(script), "no lone % in any set line")
+        // The lines that use the values are untouched: %DST% is still the variable, not %%DST%%.
+        assertContains(script, "\"%SRC%\\app\" \"%DST%\\app\" /MIR")
+    }
+
+    @Test
+    fun `windows - a bundle with an empty app or runtime folder is refused before the helper exists`() {
+        // robocopy /MIR from an empty folder empties the other one and exits 2, a success. The
+        // helper must never be written for such a bundle.
+        for (missing in WindowsInstaller.MIRRORED) {
+            val temp = tempDir()
+            val install = tempDir()
+            try {
+                val launcher = install.resolve("OmegaPlugin.exe").also { Files.writeString(it, "old exe") }
+                Files.createDirectories(install.resolve("app")).resolve("OmegaPlugin.jar").also { Files.writeString(it, "installed jar") }
+                val zip = temp.resolve("hollow.zip")
+                ZipOutputStream(Files.newOutputStream(zip)).use { out ->
+                    fun put(name: String, content: String) {
+                        out.putNextEntry(ZipEntry(name)); out.write(content.toByteArray()); out.closeEntry()
+                    }
+                    put("OmegaPlugin/OmegaPlugin.exe", "exe")
+                    put("OmegaPlugin/$missing/", "")
+                    val other = WindowsInstaller.MIRRORED.first { it != missing }
+                    put("OmegaPlugin/$other/something", "x")
+                }
+                val installer = WindowsInstaller(launcher, temp, 1) { error("must not run") }
+                val failure = runCatching { installer.stage(zip) { } }.exceptionOrNull()
+                assertTrue(failure is UpdateException, "refused for an empty $missing: $failure")
+                assertContains(failure.message!!, missing)
+                assertFalse(Files.exists(temp.resolve(WindowsInstaller.HELPER_NAME)), "no helper for an empty $missing")
+                assertFalse(Files.exists(temp.resolve(WindowsInstaller.STAGE_FOLDER)), "the stage is cleaned up")
+                assertEquals("installed jar", Files.readString(install.resolve("app/OmegaPlugin.jar")), "the installed program is untouched")
+            } finally {
+                deleteTree(temp)
+                deleteTree(install)
+            }
+        }
+    }
 }

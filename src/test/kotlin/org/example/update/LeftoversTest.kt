@@ -140,7 +140,10 @@ class LeftoversTest {
     fun `a link in a copy is removed without following it`() {
         val outside = file("outside.txt")
         val folder = copy()
-        Files.createSymbolicLink(folder.resolve("link"), outside)
+        // A standard Windows account cannot create a symlink; the sweep is Linux-only, so there it is skipped.
+        runCatching { Files.createSymbolicLink(folder.resolve("link"), outside) }.getOrElse { e ->
+            org.junit.jupiter.api.Assumptions.assumeTrue(false, "this account cannot create a symlink: ${e.message}")
+        }
         assertEquals(1, Leftovers.sweepExtracted(temp, null) { false })
         assertTrue(Files.exists(outside))
     }

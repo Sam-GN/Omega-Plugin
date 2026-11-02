@@ -9,6 +9,32 @@ unverified, it says so.
 
 ---
 
+## [2.0.4-beta] — 2026-11-01
+
+### Fixed — the Windows build failed on two of the leftover-sweep tests
+
+The sweep of extracted AppImage copies added in 2.0.2 runs on Linux only, but its tests run on
+Windows too, and there two of them failed: Java names a file's owner `MACHINE\user` on Windows, so
+the check that a copy is this user's never matched, and a standard account cannot create a symlink.
+The owner is now compared by account name, and the symlink test is skipped where the account cannot
+make one, as the installer's already is. Nothing a user sees changes.
+
+Two guards on the Windows helper, from reading every place it deletes. A bundle whose `app` or
+`runtime` folder is empty is refused before the helper is written, because robocopy mirrors an
+empty folder by emptying the other one and calls that success. And a `%` in any path is written as
+`%%`, because `cmd` drops a lone one from a batch file, so `D:(% off` would have been read as
+`D:( off` and every later step would have acted on a name that is not the folder's. Both measured
+on this machine.
+
+The Windows side of 2.0.0 to 2.0.3 was run on Windows for the first time. An update through the About
+dialog from an installed 2.0.3 folder named `José only` refilled it, removed a planted stale jar and
+DLL, left a file and a folder kept beside `OmegaPlugin.exe` alone, waited for the old process to exit
+before copying (measured against a live PID), restarted the program and left the temp folder clean;
+a ten-minute-old partial download was removed at start and a fresh one kept; and the top bar grew to
+show Rescan, Start and Rec at 1000 and 720 pixels wide.
+
+---
+
 ## [2.0.3-beta] — 2026-11-01
 
 ### Fixed — Rescan, Start and Rec could be hidden on a smaller screen

@@ -85,7 +85,8 @@ object Leftovers {
     fun isOurs(folder: Path): Boolean {
         if (!EXTRACTED.matches(folder.fileName.toString()) || !Files.isDirectory(folder)) return false
         if (!Files.isRegularFile(folder.resolve("omega-plugin.desktop"))) return false
-        val owner = runCatching { Files.getOwner(folder).name }.getOrNull()
+        // Windows names an owner `MACHINE\user`; the account is the part after the last backslash.
+        val owner = runCatching { Files.getOwner(folder).name.substringAfterLast('\\') }.getOrNull()
         if (owner != System.getProperty("user.name")) return false
         return runCatching {
             Files.list(folder.resolve("lib")).use { files ->

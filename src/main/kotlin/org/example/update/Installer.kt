@@ -269,6 +269,14 @@ class WindowsInstaller(
                 deleteTree(expanded)
                 throw UpdateException("The download does not contain $exe.", reachedServer = true)
             }
+        // The helper mirrors these two, and robocopy mirrors an empty folder by emptying the
+        // other one (exit 2, a success): a bundle missing either must never reach it.
+        for (name in MIRRORED) {
+            if (!hasFiles(source.resolve(name))) {
+                deleteTree(expanded)
+                throw UpdateException("The download has no $name folder, so it is not a whole bundle.", reachedServer = true)
+            }
+        }
         val helper = temp.resolve(HELPER_NAME)
         Files.writeString(helper, helperScript(pid, source, target, exe, download, expanded))
         progress("Ready to restart…")
@@ -278,6 +286,22 @@ class WindowsInstaller(
     companion object {
         const val HELPER_NAME = "omega-update.cmd"
         const val STAGE_FOLDER = "omega-update"
+
+        /** The folders the helper mirrors with `/MIR`; each must arrive with something in it. */
+        val MIRRORED = listOf("app", "runtime")
+
+        /** A folder with at least one entry in it. */
+        fun hasFiles(folder: Path): Boolean =
+            Files.isDirectory(folder) && Files.list(folder).use { it.findAny().isPresent }
+
+        /**
+         * A path as a `set "NAME=…"` line can carry it. `cmd` drops a lone `%` from a batch file's
+         * line, so `D:\50% off` would be read as `D:\50 off` and every later step would act on a
+         * name that is not the folder's; `%%` is read as `%`. Measured on Windows 10 in 2.0.4.
+         * Nothing else needs escaping inside the quotes: `!` only matters under delayed expansion,
+         * which this script never turns on, and a `"` cannot be in a Windows path.
+         */
+        fun cmdValue(path: Path): String = path.toString().replace("%", "%%")
         const val NOT_WRITABLE =
             "Could not write to the program folder, so this copy cannot replace itself. Unzip the download over it by hand."
 
@@ -352,10 +376,10 @@ class WindowsInstaller(
             rem Omega-Plugin update helper. Written by the program; removes itself when done.
             chcp 65001 >nul
             set "PID=$pid"
-            set "SRC=$source"
-            set "DST=$target"
-            set "ZIP=$zip"
-            set "STAGE=$expanded"
+            set "SRC=${cmdValue(source)}"
+            set "DST=${cmdValue(target)}"
+            set "ZIP=${cmdValue(zip)}"
+            set "STAGE=${cmdValue(expanded)}"
             title Omega-Plugin update
             :wait
             "%SystemRoot%\System32\tasklist.exe" /FI "PID eq %PID%" 2>nul | "%SystemRoot%\System32\find.exe" "%PID%" >nul

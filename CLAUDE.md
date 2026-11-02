@@ -575,7 +575,9 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   second running copy keeps its download, and `appimage_extracted_<hash>` folders the runtime leaves
   in `TMPDIR` without FUSE, one per version at 65 MB. Every AppImage uses that prefix, so one goes
   only with this program's desktop entry and jar in it, this user's ownership, not this process's
-  and not any running process's. Each of those rules has a test saying what must survive.
+  and not any running process's. Each of those rules has a test saying what must survive, and the
+  tests run on Windows too, where Java names an owner `MACHINE\user`: the owner is compared by
+  account name (2.0.4).
 - **What a user keeps carries no version.** `Omega-Plugin-Linux.AppImage`, the `OmegaPlugin` folder
   and `OmegaPlugin.jar` inside either bundle, since 2.0.0: a shortcut needs a path that survives an
   update, and a name that survives an update cannot truthfully state a version. The jar is on the
@@ -591,14 +593,19 @@ button; pressing it fetches GitHub's release list, and a newer release shows its
   shortcut and taskbar pin. `app` and `runtime` are mirrored with `/MIR`, so a file a version
   dropped does not stay for ever; the folder itself only gets `/E`, because `/MIR` there would delete
   what a user keeps beside the exe. Wine's `robocopy` fails on everything, so this cannot be tried
-  off Windows. The installed
+  off Windows; it was run on Windows in 2.0.4, where a planted stale jar and DLL went and a file
+  kept beside the exe stayed. The installed
   folder is `jpackage.app-path`'s parent; writability is proved by writing, and a folder under
   `Program Files` fails that probe and gets download-only. The script is held against a golden copy
   in `src/test/resources/update/`. Two rules it learned on Windows in 1.9.2: it begins with
   `chcp 65001`, because `cmd` reads a batch file in the OEM code page and a UTF-8 path with an é in
   it was garbled into a failed copy and no restart; and every external command in it is named by
   its `System32` path, because with Git for Windows' Unix tools on the PATH a bare `find` is GNU
-  find, the wait loop ended at once and the copy ran against the open program.
+  find, the wait loop ended at once and the copy ran against the open program. Two more
+  in 2.0.4: a `%` in a path is written `%%`, since `cmd` drops a lone one from a batch file and the
+  helper would act on a name that is not the folder's; and `stage` refuses a bundle whose `app` or
+  `runtime` is empty, because `robocopy /MIR` from an empty folder empties the other one and exits
+  2, a success. A missing source folder is refused with 16 and purges nothing.
 - **Linux replaces the AppImage at its own path, after running the new one.** `APPIMAGE` names the
   running image, resolved through any symlink. The download lands beside it under a hidden staged
   name (`Installer.stagedName`), so nothing watching the folder takes it for an install, and `stage`
@@ -833,7 +840,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-468 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+470 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`
