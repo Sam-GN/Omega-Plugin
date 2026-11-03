@@ -51,6 +51,7 @@ be confused with each other:
 | `docs/virtual-io.md` | Routing Omega into and out of other applications. |
 | `docs/WhatsDone.md` | What has been finished, against the original requirements. |
 | `docs/update-check.md` | The plan Check for updates was built from, in 1.8.0. History now: its header lists where the build departed from it. The rules it produced are under "Check for updates" below. |
+| `docs/mac-impl.md` | **The macOS work plan**, items `M1`–`M9` and tests `T1`–`T13`, written 2026-11-02 before anything had run on a Mac. Its §0 is the current status and overrides the plan text below it. Apple Silicon only, unsigned by decision, a zipped `.app` that replaces itself the way the AppImage does. |
 | `docs/theme-optional.md`, `docs/profile-optional.md`, `docs/pickup-optional.md`, `docs/instrument-sampler.md` | **Proposals for things nobody has promised.** Written to review later. Do not treat as commitments or as a backlog. The last is the instrument sampler — a captured note played chromatically from a keyboard, and the guitar as its controller. |
 
 Nothing in any of them is a markdown link — every cross-reference is prose in backticks, which is
