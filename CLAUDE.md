@@ -389,6 +389,14 @@ sees a JACK entry and the Windows picker is exactly what it was before Linux exi
   `avail_min`, one period; a loop that reads a partial period and then waits sleeps a whole period
   for the remainder and falls behind the card every cycle. That was an xrun every third period at
   256 frames until `AlsaStream` checked `snd_pcm_avail` before reading.
+- **…and never trusts a wait to have slept.** PipeWire's ALSA plugin ignores `avail_min`:
+  `snd_pcm_wait` on its playback returns at once, 1.39 million times in three seconds against 559
+  periods written. A `SCHED_FIFO` thread that goes round without blocking is killed by the kernel
+  at the 200 ms `RLIMIT_RTTIME` rtkit requires — SIGKILL, the whole process, nothing in the log,
+  exit status 9 in the journal. That was a converted ALSA stream into `Default` until 2.2.3. Every
+  `AlsaStream` wait goes through `await`, and `WaitGuard` sleeps the shortfall (direct-mapped
+  `usleep`, `PosixRt`) when the wait came back early. A new loop, or a new wait in an old one,
+  goes through the same door. A JVM test that dies with exit 137 is this.
 
 The degradation path is tested by deliberately breaking it — run with JNA off the classpath and
 confirm the app starts, streams on Java Sound and explains itself. A degradation path that has never
@@ -974,7 +982,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-523 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+527 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

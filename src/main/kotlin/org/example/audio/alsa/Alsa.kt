@@ -127,12 +127,31 @@ internal object AlsaRt {
     }
 }
 
+/**
+ * The one libc call the stream loop makes: a real sleep, for when `snd_pcm_wait` returns without
+ * having slept (see [WaitGuard]). Direct-mapped for the same reason as [AlsaRt].
+ */
+internal object PosixRt {
+    @JvmStatic external fun usleep(micros: Int): Int
+
+    @Volatile
+    private var registered = false
+
+    @Synchronized
+    fun register() {
+        if (registered) return
+        Native.register(PosixRt::class.java, NativeLibrary.getInstance("c"))
+        registered = true
+    }
+}
+
 internal object AlsaLibrary {
     const val SONAME = "libasound.so.2"
 
     val api: AlsaApi by lazy {
         val native = NativeLibrary.getInstance(SONAME)
         AlsaRt.register(native)
+        PosixRt.register()
         Native.load(SONAME, AlsaApi::class.java)
     }
 }

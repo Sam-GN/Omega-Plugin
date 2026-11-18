@@ -957,6 +957,10 @@ button and find the file. The rest of the preset is already in place.
 **The rate picker shows a C.** Not a fault: your input cannot run at the output's rate and is being
 converted, at a cost of about 0.7 ms. Choosing a rate without the C, if there is one, avoids it.
 
+**On Linux the program closes by itself a second after Start.** Fixed in 2.2.3. Before that it
+happened with ALSA when the rate had a C beside it and the output was `Default`. Choose the rate
+without the C, or a `(direct)` output, or update.
+
 **On Linux the status line says the audio thread is not realtime.** The program needs permission to
 run its audio thread at realtime priority, and that is an account setting. Run the AppImage from a
 terminal with `--list-backends`; its last line names the fix for your distribution, usually adding

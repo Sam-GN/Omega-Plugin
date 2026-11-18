@@ -207,3 +207,24 @@ With `LC_ALL=C`, run from a working folder such as `José Пётр`, the program
 image in the same folder starts normally when the working folder is plain, and everything works under
 a UTF-8 locale, which is what a desktop sets. The way round is to start it from another folder, or
 under a UTF-8 locale. Measured with the 1.9.2 AppImage.
+
+---
+
+## 11. On Linux, a converted rate into the sound server closed the program within a second
+
+**Affects:** ALSA, from 1.7.0 (when ALSA began converting the input) to 2.2.2.
+**Status:** **fixed in 2.2.3.** Kept here because 2.1.4 is the release users have until then.
+
+With the input on a device that cannot do the output's rate (the picker's `C`) and the output on
+`Default — through PipeWire`, the program vanished about a second after Start: no message, no
+"Shutting down" in the log, exit status 9 in the system journal. PipeWire's ALSA plugin returns
+from `snd_pcm_wait` at once whatever `avail_min` says, so the converting loop, which waits on the
+output, spun, and the kernel killed the realtime thread's process at the 200 ms `RLIMIT_RTTIME`.
+Reproduced off the device in a test that drove `AlsaStream` from PipeWire into PipeWire at
+44.1 → 48 kHz: the 2.2.2 loop died with exit 137 inside three seconds, the 2.2.3 one ran a minute
+at realtime priority. Before 2.2.3: choose the rate without the C, or a `(direct)` output.
+
+The same test, with PipeWire's `Default` as the *converted input*, counts about one input shortfall
+every two seconds — never an output underrun. The program never builds that pairing (`Default`
+offers every rate, so it is never converted); it is recorded so the figure is not mistaken for a
+fault of the fix if it is seen again.

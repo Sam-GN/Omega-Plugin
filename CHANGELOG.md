@@ -9,6 +9,32 @@ unverified, it says so.
 
 ---
 
+## [2.2.3-beta] — 2026-11-18
+
+### Fixed — on Linux, a converted rate into the sound server closed the program within a second
+
+Choosing a rate marked **C** on ALSA, with the output on `Default — through PipeWire`, closed
+the whole program about a second after Start, with no message and nothing in the log. Seen with a
+44.1 kHz-only USB interface at 48 kHz, twice in a row.
+
+When the input is converted, the output's clock drives the audio loop, and the loop asked the
+output to wake it when there was room for the next period. PipeWire's ALSA plugin wakes it
+straight away instead, every time. Measured with this program's own settings, the wait came back
+in under 0.2 ms 1 388 342 times in three seconds, while only 559 periods were written. The loop
+never slept, and a realtime thread that does not sleep for 200 ms is killed by the kernel, taking
+the program with it (SIGKILL, exit status 9).
+
+The loop no longer trusts that wait. When it comes back early, the loop sleeps for as long as
+the missing audio takes to arrive. A converted stream from PipeWire into PipeWire now runs for a
+minute at realtime priority with `realtimeRatio` 1.0000, where the previous code was killed inside
+three seconds under the same test. Same-rate streams and `(direct)` outputs never waited this way
+and behave as before; every ALSA wait now has the same guard. The log says so once a stream when
+a device's wait does not sleep.
+
+Until this version: use the rate without the C, or a `(direct)` output.
+
+---
+
 ## [2.2.2-beta] — 2026-11-17
 
 ### Changed — the build always uses Temurin 21

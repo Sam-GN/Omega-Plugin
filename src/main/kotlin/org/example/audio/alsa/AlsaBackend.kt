@@ -395,6 +395,9 @@ internal class AlsaStream(
     private val periodNanos = period * 1_000_000_000L / rate
     private val waitMillis = maxOf(20, (period * 4000L / rate).toInt())
 
+    /** Sleeps where `snd_pcm_wait` would not: PipeWire's plugin, which ignores `avail_min`. */
+    private val waitGuard = WaitGuard(rate, waitMillis) { PosixRt.usleep(it) }
+
     @Volatile
     override var xruns: Int = 0
         private set
@@ -616,11 +619,20 @@ internal class AlsaStream(
     }
 
     private fun monitorLoop() {
+        var saidEarlyWakes = false
         while (running || lostCode != 0) {
             try {
                 Thread.sleep(250)
             } catch (_: InterruptedException) {
                 return
+            }
+            if (!saidEarlyWakes && waitGuard.earlyWakes > 0) {
+                saidEarlyWakes = true
+                Log.info(
+                    "alsa",
+                    "$playbackLabel / $captureLabel: snd_pcm_wait returns without waiting " +
+                        "(PipeWire's plugin ignores avail_min); the loop sleeps the shortfall instead.",
+                )
             }
             val code = lostCode
             if (code != 0) {
@@ -660,7 +672,7 @@ internal class AlsaStream(
                 val avail = AlsaRt.snd_pcm_avail(c)
                 if (avail < 0) { failed = avail.toInt(); break }
                 if (avail < period - got) {
-                    val w = AlsaRt.snd_pcm_wait(c, waitMillis)
+                    val w = await(c, period - got - avail)
                     if (w < 0) { failed = w; break }
                     continue
                 }
@@ -709,7 +721,7 @@ internal class AlsaStream(
             var failed = if (room < 0) room.toInt() else 0
             if (failed == 0 && room < playbackReadyAt) {
                 // Zero is a timeout: go round and look again, which also notices `running`.
-                val w = AlsaRt.snd_pcm_wait(p, waitMillis)
+                val w = await(p, playbackReadyAt - room)
                 if (w >= 0) continue
                 failed = w
             }
@@ -777,13 +789,25 @@ internal class AlsaStream(
             if (w >= 0) {
                 put += w.toInt()
             } else if (w == -EAGAIN.toLong()) {
-                val r = AlsaRt.snd_pcm_wait(p, waitMillis)
+                val r = await(p, (period - put).toLong())
                 if (r < 0) return r
             } else {
                 return w.toInt()
             }
         }
         return 0
+    }
+
+    /**
+     * `snd_pcm_wait`, never trusted to have slept: when it comes back at once, [waitGuard] sleeps
+     * for as long as [missingFrames] take to arrive. A realtime thread that went round without
+     * blocking would be killed by the kernel at the 200 ms `RLIMIT_RTTIME` (2.2.3).
+     */
+    private fun await(pcm: Pointer, missingFrames: Long): Int {
+        val t0 = System.nanoTime()
+        val w = AlsaRt.snd_pcm_wait(pcm, waitMillis)
+        waitGuard.after(w, System.nanoTime() - t0, missingFrames)
+        return w
     }
 
     /** The counters, once a period has gone out. */

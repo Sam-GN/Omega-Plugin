@@ -251,6 +251,9 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **A converted ALSA rate no longer closes the program, 2.2.3-beta.** Into the PipeWire `Default`
+  output, a `C` rate was killed by the kernel within a second of Start; the loop now sleeps where
+  the sound server's wait would not.
 - **WASAPI exclusive shows the delay a driver hides, 2.2.1-beta.** The output's own clock is read
   after Start, and what it holds beyond the report is added to the round trip shown.
 - **WASAPI hybrid, 2.2.0-beta.** The input exclusive and the output shared at `IAudioClient3`'s
