@@ -49,7 +49,10 @@ enum class BackendId(val displayName: String, val rank: Int) {
      */
     JACK("JACK / PipeWire", 1),
 
-    /** Linux's always-present rung: the sound server through `default`, or a card d/**
+    /** Linux's always-present rung: the sound server through `default`, or a card directly. */
+    ALSA("ALSA", 2),
+
+    /**
      * WASAPI with the input exclusive and the output shared at `IAudioClient3`'s shortest period
      * (2.2.0). For an output whose exclusive path is slower than its shared one — a Cirrus Logic
      * SoundWire laptop output held 102 ms behind its own clock in exclusive mode and 2.4 ms shared —

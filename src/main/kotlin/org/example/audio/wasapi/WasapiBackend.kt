@@ -308,36 +308,6 @@ open class WasapiBackend protected constructor(
     }
 
     /**
-     * One throwaway `Initialize` in exactly the mode the stream will use, and then the check that
-     * matters: **did the driver grant the size it was asked for?**
-     *
-     * A successful `Initialize` is not on its own proof that a size works. The AORUS HDMI output
-     * accepts a 144-frame request, returns `S_OK`, reports a 192-frame buffer, and then goes on
-     * firing its event every 144 frames — so the event-driven contract of one buffer per event
-     * pushes a third more audio than the device can take, and it xruns three hundred times a second.
-     * Nothing in the return code says so; only the size does.
-     *
-     * Requiring granted == requested is what keeps that size out of the picker in the first place,
-     * which is the same rule the rest of this backend follows: never offer what cannot work. The
-     * alternative — writing `bufferSize - GetCurrentPadding()` per event — was tried and is worse:
-     * padding behaviour in this mode is driver-dependent, and on a well-behaved wireless endpoint it
-     * starved the stream to 37 % of realtime.
-     */
-    /**
-     * Shared mode does not negotiate, so there is nothing to search — only things to read back.
-     *
-     * The rate is whatever Windows has the endpoint set to; a client cannot ask for another one and
-     * be given it, the engine would convert instead. So exactly one rate is offered, and the message
-     * when two devices disagree is genuinely actionable here — unlike in exclusive mode, telling
-     * someone to change the rate in Sound settings is the right advice, because that setting *is*
-     * the rate.
-     *
-     * Buffer sizes come from initialising for real and reading back what the engine granted. It
-     * rounds up to its own period, so asking is the only way to know, and there is no reason to
-     * refuse a rounded size the way exclusive mode must — in shared mode rounding is the contract
-     * rather than a driver misbehaving.
-     */
-    /**
      * The hybrid's output: the engine periods `IAudioClient3` offers below the default, each one
      * proved by a real `InitializeSharedAudioStream`.
      *
@@ -388,6 +358,20 @@ open class WasapiBackend protected constructor(
         )
     }
 
+    /**
+     * Shared mode does not negotiate, so there is nothing to search — only things to read back.
+     *
+     * The rate is whatever Windows has the endpoint set to; a client cannot ask for another one and
+     * be given it, the engine would convert instead. So exactly one rate is offered, and the message
+     * when two devices disagree is genuinely actionable here — unlike in exclusive mode, telling
+     * someone to change the rate in Sound settings is the right advice, because that setting *is*
+     * the rate.
+     *
+     * Buffer sizes come from initialising for real and reading back what the engine granted. It
+     * rounds up to its own period, so asking is the only way to know, and there is no reason to
+     * refuse a rounded size the way exclusive mode must — in shared mode rounding is the contract
+     * rather than a driver misbehaving.
+     */
     private fun probeShared(dev: MMDevice): DeviceCapabilities {
         val empty = DeviceCapabilities(emptyList(), emptyList(), 0, Pairing.ANY_PAIR)
         val ac = dev.audioClientOrNull() ?: return empty
@@ -462,6 +446,21 @@ open class WasapiBackend protected constructor(
      * 2.1.5 the probe treated it as a refusal, so such a driver could pass no size at all here while
      * open would have coped. The aligned size is held to the same rule as any other: granted ==
      * requested, or it is not offered.
+     *
+     * One throwaway `Initialize` in exactly the mode the stream will use, and then the check that
+     * matters: **did the driver grant the size it was asked for?**
+     *
+     * A successful `Initialize` is not on its own proof that a size works. The AORUS HDMI output
+     * accepts a 144-frame request, returns `S_OK`, reports a 192-frame buffer, and then goes on
+     * firing its event every 144 frames — so the event-driven contract of one buffer per event
+     * pushes a third more audio than the device can take, and it xruns three hundred times a second.
+     * Nothing in the return code says so; only the size does.
+     *
+     * Requiring granted == requested is what keeps that size out of the picker in the first place,
+     * which is the same rule the rest of this backend follows: never offer what cannot work. The
+     * alternative — writing `bufferSize - GetCurrentPadding()` per event — was tried and is worse:
+     * padding behaviour in this mode is driver-dependent, and on a well-behaved wireless endpoint it
+     * starved the stream to 37 % of realtime.
      */
     private fun acceptedSize(dev: MMDevice, rate: Int, frames: Int): Int? {
         val first = initialisedSize(dev, rate, frames) ?: return null

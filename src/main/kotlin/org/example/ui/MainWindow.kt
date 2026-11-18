@@ -1391,6 +1391,9 @@ class MainWindow : JFrame("Omega-Plugin") {
         )
     }
 
+    /** The stream format whose hidden output delay the status line has already mentioned. */
+    private var reportedHiddenFormat: StreamFormat? = null
+
     /**
      * Transport health, polled off the volatile counters the audio thread writes.
      *
@@ -1398,9 +1401,6 @@ class MainWindow : JFrame("Omega-Plugin") {
      * measured rather than assumed because the driver keeps a lead of its own on top of what the
      * engine primes.
      */
-    /** The stream format whose hidden output delay the status line has already mentioned. */
-    private var reportedHiddenFormat: StreamFormat? = null
-
     private fun updateTransport() {
         val format = engine.format
         if (!engine.isRunning || format == null) {
