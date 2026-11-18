@@ -58,6 +58,21 @@ internal val SUPPORTED_BITS = listOf(24 to false, 32 to true, 16 to false)
 internal val CANDIDATE_RATES = listOf(44_100, 48_000, 88_200, 96_000)
 
 /**
+ * A frame count as the 100 ns duration `Initialize` takes, **rounded up**.
+ *
+ * Truncating was the bug (2.1.5). At 48 kHz a frame is 208.33 units and many sizes come out whole,
+ * but at 44.1 kHz a frame is 226.757… units and almost none do, so a truncated duration was a hair
+ * short of the size meant — and a driver that floors on the way back granted one frame less. The
+ * probe then refused every size, and a Cirrus Logic SoundWire output reported "no usable buffer
+ * size at 44.1 kHz" while 48 kHz worked. Rounding to nearest, as Microsoft's sample does, is not
+ * enough: it is short whenever the fraction is under a half. Rounded up, the duration is never
+ * short and is over by less than one unit — under a hundredth of a frame at 96 kHz — so a driver
+ * that floors and one that rounds both come back to the frames asked for. Exact integer arithmetic,
+ * so no double can land on the wrong side. `WasapiDurationTest` checks every size at every rate.
+ */
+internal fun hnsForFrames(frames: Int, rate: Int): Long = Math.ceilDiv(frames * 10_000_000L, rate.toLong())
+
+/**
  * WASAPI in **exclusive**, event-driven mode: the fallback when there is no ASIO driver.
  *
  * Exclusive mode bypasses the Windows shared-mode mixer entirely, which is where the ~47 ms of fixed
@@ -74,18 +89,32 @@ internal val CANDIDATE_RATES = listOf(44_100, 48_000, 88_200, 96_000)
  *   stream is open, and a driver left un-released can stay stuck until a reboot — which is why
  *   [close] releases in a `finally` and the app exits deliberately.
  */
-open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : AudioBackend {
+open class WasapiBackend protected constructor(
+    /** The input through the Windows mixer rather than around it. */
+    private val captureShared: Boolean,
+    /** The output through the Windows mixer rather than around it. */
+    private val renderShared: Boolean,
+    /** The output at `IAudioClient3`'s short engine periods rather than the default 10 ms. */
+    private val lowLatencyRender: Boolean,
+    override val id: BackendId,
+) : AudioBackend {
+
+    /** WASAPI exclusive, both ways — what the registry constructs by name. */
+    constructor() : this(false, false, false, BackendId.WASAPI_EXCLUSIVE)
+
+    /** One mode for both directions: exclusive or shared. */
+    protected constructor(shareMode: Int) : this(
+        shareMode == WasapiIds.SHARED,
+        shareMode == WasapiIds.SHARED,
+        false,
+        if (shareMode == WasapiIds.SHARED) BackendId.WASAPI_SHARED else BackendId.WASAPI_EXCLUSIVE,
+    )
 
     /**
      * Two endpoints, two clocks, a ring between them: the capture side can run at its own rate
      * and be converted on the way into the ring. See [WasapiStream.captureLoop] and `SampleRates`.
      */
     override val convertsInput: Boolean get() = true
-
-    private val shared get() = shareMode == WasapiIds.SHARED
-
-    override val id =
-        if (shareMode == WasapiIds.SHARED) BackendId.WASAPI_SHARED else BackendId.WASAPI_EXCLUSIVE
 
     override val availability: Availability =
         if (Rt.isWindows) Availability.Available
@@ -225,7 +254,9 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
         try {
             val dev = en.list(flow).firstOrNull { runCatching { it.id() == device.id }.getOrDefault(false) }
                 ?: return DeviceCapabilities(listOf(48_000), listOf(480), 480, Pairing.ANY_PAIR)
-            if (shared) return try { probeShared(dev) } finally { dev.release() }
+            val render = flow == WasapiIds.RENDER
+            if (render && lowLatencyRender) return try { probeLowLatency(dev) } finally { dev.release() }
+            if (if (render) renderShared else captureShared) return try { probeShared(dev) } finally { dev.release() }
             try {
                 val first = dev.audioClientOrNull()
                     ?: return DeviceCapabilities(listOf(48_000), listOf(480), 480, Pairing.ANY_PAIR)
@@ -255,7 +286,9 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
                 // No fallback when nothing passes. An empty list is the truthful answer for an
                 // endpoint that will not run in exclusive mode on any size we can offer, and it is
                 // what lets the UI say so instead of offering a size that is certain to fail.
-                val sizes = candidates.filter { accepts(dev, rate, it) }
+                // A candidate the driver wants aligned is replaced by the size it names, so the
+                // list holds what was granted rather than what was asked.
+                val sizes = candidates.mapNotNullTo(sortedSetOf()) { acceptedSize(dev, rate, it) }.toList()
                 return DeviceCapabilities(
                     sampleRates = rates.ifEmpty { listOf(preferred) },
                     bufferSizes = sizes,
@@ -304,6 +337,57 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
      * refuse a rounded size the way exclusive mode must — in shared mode rounding is the contract
      * rather than a driver misbehaving.
      */
+    /**
+     * The hybrid's output: the engine periods `IAudioClient3` offers below the default, each one
+     * proved by a real `InitializeSharedAudioStream`.
+     *
+     * Most endpoints answer with `minimum == default` and have nothing to give — every one on the
+     * machine the shared backend was written on did. Those get [probeShared]'s ordinary sizes, so
+     * the hybrid still runs on them, only no faster than shared. A Cirrus Logic SoundWire output
+     * answered 96 / 480 frames at 48 kHz, and ran at 2 ms where its exclusive path held 102 ms
+     * behind its own clock (2.2.0).
+     */
+    private fun probeLowLatency(dev: MMDevice): DeviceCapabilities {
+        val ac3 = dev.audioClient3OrNull() ?: return probeShared(dev)
+        val mix = ac3.mixFormat()
+        val periods = mix?.let { runCatching { ac3.sharedModeEnginePeriod(it) }.getOrNull() }
+        val rate = mix?.let { AudioClient.describe(it).rate } ?: 0
+        ac3.release()
+        if (mix == null || periods == null || periods[2] <= 0 || periods[2] >= periods[0]) {
+            mix?.let { Ole32.INSTANCE.CoTaskMemFree(it) }
+            return probeShared(dev)
+        }
+        val (default, fundamental, min, max) = periods.toList()
+        val candidates = sortedSetOf<Int>()
+        var p = min
+        while (p <= max && candidates.size < 8) {
+            candidates += p
+            p += min
+        }
+        candidates += default
+        val granted = candidates.filter { period ->
+            val c = dev.audioClient3OrNull() ?: return@filter false
+            try {
+                period % fundamental.coerceAtLeast(1) == 0 &&
+                    c.initializeSharedAudioStream(WasapiIds.STREAMFLAGS_EVENTCALLBACK, period, mix) == 0
+            } catch (_: Throwable) {
+                false
+            } finally {
+                c.release()
+            }
+        }
+        Ole32.INSTANCE.CoTaskMemFree(mix)
+        Log.info("wasapi", "${dev.friendlyName()}: low-latency shared periods $granted of ${periods.joinToString("/")} at $rate Hz.")
+        if (granted.isEmpty()) return probeShared(dev)
+        return DeviceCapabilities(
+            sampleRates = listOf(rate),
+            bufferSizes = granted,
+            preferredBufferFrames = granted.first(),
+            pairing = Pairing.ANY_PAIR,
+            preferredSampleRate = rate,
+        )
+    }
+
     private fun probeShared(dev: MMDevice): DeviceCapabilities {
         val empty = DeviceCapabilities(emptyList(), emptyList(), 0, Pairing.ANY_PAIR)
         val ac = dev.audioClientOrNull() ?: return empty
@@ -352,7 +436,7 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
         val ac = dev.audioClientOrNull() ?: return null
         return try {
             val rate = AudioClient.describe(mix).rate
-            val duration = frames * 10_000_000L / rate
+            val duration = hnsForFrames(frames, rate)
             // Periodicity must be zero in shared mode — the engine owns the period, and passing a
             // non-zero value here is an outright E_INVALIDARG.
             val hr = ac.initialize(
@@ -368,8 +452,31 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
         }
     }
 
-    private fun accepts(dev: MMDevice, rate: Int, frames: Int): Boolean {
-        val ac = dev.audioClientOrNull() ?: return false
+    /**
+     * The size this endpoint will run at when asked for [frames], or null if none.
+     *
+     * Usually [frames] itself or nothing. The exception is `AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED`,
+     * which Intel SST and SoundWire drivers return for a size off their alignment: the failed client
+     * still reports the size the driver wants through `GetBufferSize`, and that is tried on a fresh
+     * client — the documented recovery, and what [WasapiStream] has always done on open. Before
+     * 2.1.5 the probe treated it as a refusal, so such a driver could pass no size at all here while
+     * open would have coped. The aligned size is held to the same rule as any other: granted ==
+     * requested, or it is not offered.
+     */
+    private fun acceptedSize(dev: MMDevice, rate: Int, frames: Int): Int? {
+        val first = initialisedSize(dev, rate, frames) ?: return null
+        if (first.hr == 0) return frames.takeIf { first.granted == frames }
+        if (first.hr != WasapiIds.E_BUFFER_SIZE_NOT_ALIGNED || first.granted <= 0) return null
+        val aligned = first.granted
+        val second = initialisedSize(dev, rate, aligned) ?: return null
+        return aligned.takeIf { second.hr == 0 && second.granted == aligned }
+    }
+
+    private class Probe(val hr: Int, val granted: Int)
+
+    /** One throwaway exclusive `Initialize`; its result and whatever `GetBufferSize` says after it. */
+    private fun initialisedSize(dev: MMDevice, rate: Int, frames: Int): Probe? {
+        val ac = dev.audioClientOrNull() ?: return null
         var wfx: com.sun.jna.Memory? = null
         return try {
             for ((bits, isFloat) in SUPPORTED_BITS) {
@@ -377,16 +484,16 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
                 if (ac.isFormatSupported(WasapiIds.EXCLUSIVE, candidate) == 0) { wfx = candidate; break }
                 candidate.close()
             }
-            val format = wfx ?: return false
-            val duration = frames * 10_000_000L / rate
+            val format = wfx ?: return null
+            val duration = hnsForFrames(frames, rate)
             val hr = ac.initialize(
                 WasapiIds.EXCLUSIVE,
                 WasapiIds.STREAMFLAGS_EVENTCALLBACK or WasapiIds.STREAMFLAGS_NOPERSIST,
                 duration, duration, format,
             )
-            hr == 0 && runCatching { ac.bufferSizeFrames() }.getOrDefault(-1) == frames
+            Probe(hr, runCatching { ac.bufferSizeFrames() }.getOrDefault(-1))
         } catch (_: Throwable) {
-            false
+            null
         } finally {
             wfx?.close()
             ac.release()
@@ -417,7 +524,7 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
             val bad = if (inSizes.isEmpty()) input else output
             val badRate = if (inSizes.isEmpty()) captureRate else rate
             throw AudioBackendException(
-                if (shared) {
+                if (if (inSizes.isEmpty()) captureShared else renderShared) {
                     "${bad.name} would not open in shared mode at ${SampleRates.format(badRate)}."
                 } else {
                     "${bad.name} has no usable buffer size at ${SampleRates.format(badRate)} in " +
@@ -429,7 +536,15 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
         // The buffer request is in engine frames; the capture side's sizes are at its own rate.
         val wantCapture = Math.round(request.bufferFrames.toFloat() * captureRate / rate)
         val captureFrames = inSizes.minByOrNull { kotlin.math.abs(it - wantCapture) }!!
-        val renderFrames = outSizes.minByOrNull { kotlin.math.abs(it - request.bufferFrames) }!!
+        // The hybrid's output always takes its smallest period. The shared engine keeps about a
+        // buffer queued, and the buffer follows the period — measured on a Cirrus output, 2.4 ms
+        // queued at 96 frames and 8.4 ms at 192 — while a longer block makes the chain no cheaper
+        // per sample. BUFFER sets the input.
+        val renderFrames = if (lowLatencyRender) {
+            outSizes.first()
+        } else {
+            outSizes.minByOrNull { kotlin.math.abs(it - request.bufferFrames) }!!
+        }
         if (captureRate != rate) {
             Log.info(
                 "wasapi",
@@ -440,7 +555,8 @@ open class WasapiBackend(private val shareMode: Int = WasapiIds.EXCLUSIVE) : Aud
 
         streaming = true
         return WasapiStream(
-            input, output, request, callback, events, captureFrames, renderFrames, captureRate, shareMode,
+            input, output, request, callback, events, captureFrames, renderFrames, captureRate,
+            captureShared, renderShared, lowLatencyRender,
         ) {
             streaming = false
             // Runs on whoever closed the stream, never on an audio thread — the render and capture
@@ -503,11 +619,13 @@ internal class WasapiStream(
     private val renderTargetFrames: Int,
     /** The capture endpoint's own rate. Differs from the request's when the input is converted. */
     private val captureRate: Int,
-    private val shareMode: Int,
+    /** Per direction, because the hybrid runs an exclusive input beside a shared output. */
+    private val captureShared: Boolean,
+    private val renderShared: Boolean,
+    /** The output opens through `IAudioClient3` at [renderTargetFrames] as its engine period. */
+    private val lowLatencyRender: Boolean,
     private val onClosed: () -> Unit,
 ) : AudioStream {
-
-    private val shared get() = shareMode == WasapiIds.SHARED
 
     private val ring = FloatArray(1 shl 15)
     private val ringMask = ring.size - 1
@@ -550,8 +668,45 @@ internal class WasapiStream(
 
     private val ready = java.util.concurrent.CountDownLatch(2)
 
-    override var format: StreamFormat = StreamFormat(request.sampleRate, request.bufferFrames, 0, 0, 0)
-        private set
+    /** What the stream opened with, as the driver reported it. */
+    @Volatile private var baseFormat: StreamFormat = StreamFormat(request.sampleRate, request.bufferFrames, 0, 0, 0)
+
+    /**
+     * Frames written and not yet played, by the driver's own clock: the median of [QUEUE_SAMPLES]
+     * readings the render thread takes shortly after start. -1 until measured. Exclusive only.
+     */
+    @Volatile private var measuredQueueFrames = -1
+    @Volatile private var adjustedFormat: StreamFormat? = null
+
+    /**
+     * The reported format, with any output delay the driver hid added to it (2.2.1).
+     *
+     * A driver reports its latency through `GetStreamLatency` and its buffer size, and an exclusive
+     * output behind a DSP can hold far more than either says: a Cirrus Logic SoundWire output
+     * reported a 4 ms buffer while its own `IAudioClock` stood 102 ms behind what had been written,
+     * at every size. The round trip then read 14 ms to someone hearing over 100. The clock is the
+     * driver's word too, but it is the word that describes what is actually queued; when it says
+     * more than the report by over [HIDDEN_FLOOR_MS], the difference goes into
+     * `outputLatencyFrames` and is named in `hiddenOutputLatencyFrames`. Built on the reader's
+     * thread, never the audio thread.
+     */
+    override val format: StreamFormat
+        get() {
+            val base = baseFormat
+            val hidden = hiddenOutputFrames(base, measuredQueueFrames)
+            if (hidden == 0) return base
+            adjustedFormat?.let { if (it.hiddenOutputLatencyFrames == hidden && it.sampleRate == base.sampleRate) return it }
+            val adjusted = withHiddenOutput(base, measuredQueueFrames)
+            adjustedFormat = adjusted
+            Log.warn(
+                "wasapi",
+                "${outputDevice.name} holds ${"%.1f".format(hidden * 1000f / base.sampleRate)} ms of output " +
+                    "beyond the ${base.outputLatencyFrames} frames it reports, by its own clock; the round " +
+                    "trip is ${"%.1f".format(adjusted.reportedRoundTripMs)} ms, not " +
+                    "${"%.1f".format(base.reportedRoundTripMs)}.",
+            )
+            return adjusted
+        }
 
     override fun start() {
         running = true
@@ -567,14 +722,16 @@ internal class WasapiStream(
         val rate = negotiatedRate
         // Capture figures are in the capture endpoint's own frames; report them in engine frames.
         val captureInEngineFrames = Math.round(captureFrames.toFloat() * rate / captureRate)
-        format = StreamFormat(
+        baseFormat = StreamFormat(
             sampleRate = rate,
             bufferFrames = renderFrames,
             inputLatencyFrames = ((captureLatency100ns * rate) / 10_000_000L).toInt().coerceAtLeast(captureInEngineFrames),
             outputLatencyFrames = ((renderLatency100ns * rate) / 10_000_000L).toInt().coerceAtLeast(renderFrames),
             // The hop across the ring between two unlocked clocks, plus the converter when the input
             // runs at its own rate. Declared, not hidden.
-            adapterLatencyFrames = renderFrames +
+            // The hybrid's ring is steered to a millisecond above empty at its low point and swings
+            // by one input packet above that, so half a packet plus the margin is its average.
+            adapterLatencyFrames = (if (lowLatencyRender) captureInEngineFrames / 2 + rate / 1000 else renderFrames) +
                 if (captureRate != rate) SampleRates.conversionFrames(captureRate, rate) else 0,
             inputRate = captureRate,
         )
@@ -605,7 +762,12 @@ internal class WasapiStream(
                     "${if (isRender) outputDevice.name else inputDevice.name} is no longer available."
                 )
 
-            var ac = dev.audioClientOrNull()
+            // Each direction has its own mode: the hybrid runs an exclusive capture beside a shared
+            // render, and every other stream has the two the same.
+            val shared = if (isRender) renderShared else captureShared
+            val shareMode = if (shared) WasapiIds.SHARED else WasapiIds.EXCLUSIVE
+            val lowLatency = isRender && lowLatencyRender
+            var ac = (if (lowLatency) dev.audioClient3OrNull() else null) ?: dev.audioClientOrNull()
                 ?: throw AudioBackendException("Windows would not activate ${dev.friendlyName()}.")
             client = ac
 
@@ -680,19 +842,38 @@ internal class WasapiStream(
             // 264 frames at 44.1 kHz is 59 863 945.578 units, which rounds to 263 frames on the way
             // back and turns a perfectly good buffer into a reported mismatch.
             var requestedFrames = if (isRender) renderTargetFrames else captureTargetFrames
-            var duration = requestedFrames * 10_000_000L / rate
+            var duration = hnsForFrames(requestedFrames, rate)
             val format: Pointer = mixFormat ?: wfx!!
             // Periodicity must be zero in shared mode: the engine owns the period and a non-zero
             // value is rejected outright.
             val periodicity = if (shared) 0L else duration
 
-            var hr = ac.initialize(shareMode, flags, duration, periodicity, format)
+            var hr = if (lowLatency) {
+                // The hybrid's output: the Windows engine at the period asked for, in frames, rather
+                // than at its default 10 ms. Only `EVENTCALLBACK` — this call refuses `NOPERSIST`
+                // with AUDCLNT_E_INVALID_STREAM_FLAG. A driver that will not do it gets the ordinary
+                // shared stream, said in the log, rather than no sound.
+                val h = ac.initializeSharedAudioStream(WasapiIds.STREAMFLAGS_EVENTCALLBACK, requestedFrames, format)
+                if (h == 0) h else {
+                    Log.warn(
+                        "wasapi",
+                        "${dev.friendlyName()} refused a $requestedFrames-frame low-latency shared period " +
+                            "(${hrName(h)}); using the ordinary shared engine period.",
+                    )
+                    ac.release()
+                    ac = dev.audioClientOrNull() ?: throw AudioBackendException("Device went away during setup.")
+                    client = ac
+                    ac.initialize(shareMode, flags, duration, periodicity, format)
+                }
+            } else {
+                ac.initialize(shareMode, flags, duration, periodicity, format)
+            }
             if (hr == WasapiIds.E_BUFFER_SIZE_NOT_ALIGNED) {
                 // The driver tells us the size it actually wants by way of GetBufferSize; a second
                 // client has to be created because the first is now in a half-initialised state.
                 val aligned = ac.bufferSizeFrames()
                 requestedFrames = aligned
-                duration = (1e7 * aligned / rate + 0.5).toLong()
+                duration = hnsForFrames(aligned, rate)
                 ac.release()
                 ac = dev.audioClientOrNull() ?: throw AudioBackendException("Device went away during setup.")
                 client = ac
@@ -755,8 +936,17 @@ internal class WasapiStream(
             mmcss = Rt.joinProAudio()
             ready.countDown()
 
-            if (isRender) renderLoop(ac, service, event, frames, channels, bits, isFloat)
+            // Exclusive output only: the clock the hidden-delay measurement reads. A driver without
+            // one, or one that will not say its frequency, is simply not measured.
+            val clock = if (isRender && !shared) runCatching { ac.service(WasapiIds.IID_IAudioClock) }.getOrNull() else null
+            val clockHz = clock?.let { c ->
+                val f = Memory(8)
+                try { if (c.call(3, f) == 0) f.getLong(0) else 0L } finally { f.close() }
+            } ?: 0L
+
+            if (isRender) renderLoop(ac, service, event, frames, channels, bits, isFloat, clock.takeIf { clockHz > 0 }, clockHz)
             else captureLoop(ac, service, event, frames, channels, bits, isFloat)
+            clock?.release()
 
             // The render loop can stop itself when it detects the device consuming slower than it
             // asks. Surface that the same way any other device fault is surfaced.
@@ -804,6 +994,7 @@ internal class WasapiStream(
         val converter = if (captureRate != engineRate) Resampler(captureRate.toFloat(), engineRate.toFloat(), frames) else null
         val raw = if (converter != null) FloatArray(frames) else null
         val converted = if (converter != null) FloatArray(converter.maxOutputFrames) else null
+        val shared = captureShared
         ac.start()
         while (running) {
             if (Kernel32.INSTANCE.WaitForSingleObject(event, 1_000) != 0) continue
@@ -862,15 +1053,45 @@ internal class WasapiStream(
         channels: Int,
         bits: Int,
         isFloat: Boolean,
+        clock: ComObject?,
+        clockHz: Long,
     ) {
         val pp = PointerByReference()
         val inputBlock = FloatArray(frames)
+        // The hidden-delay measurement (2.2.1): frames released against the clock's position, read
+        // every fourth wake once the stream has settled, until QUEUE_SAMPLES are in. Everything it
+        // needs is allocated here.
+        var written = 0L
+        var wakes = 0
+        var taken = 0
+        val queue = LongArray(QUEUE_SAMPLES)
+        val position = Memory(8)
+        val qpcAt = Memory(8)
         val outputBlock = FloatArray(frames)
         val periodNanos = frames * 1_000_000_000L / negotiatedRate
+        val shared = renderShared
+
+        // The most the ring may hold at a render wake before a frame is dropped (2.1.5).
+        //
+        // Capture lands in packets of one capture period, so the level seen at a render wake swings
+        // by up to that much with nothing wrong: a ring running as tight as it safely can reads
+        // between one render buffer and one render buffer plus one capture packet. Anything above
+        // that, plus a margin for the two threads' wake jitter, is latency nobody needs. Until 2.1.5
+        // the ceiling was three render buffers, so a capture clock running fast — or a capture
+        // stream that started before the render one — left two whole periods in the ring for good,
+        // undeclared. A capture clock running slow already sat at the floor, so this asks of
+        // nobody a margin a slow-capture pair was not already running on. Exclusive only: shared
+        // mode's `want` is the free space and keeps the old rule.
+        val captureInEngineFrames = Math.ceilDiv(captureTargetFrames.toLong() * negotiatedRate, captureRate.toLong()).toInt()
+        val ringCeiling = frames + captureInEngineFrames + maxOf(captureInEngineFrames / 2, negotiatedRate / 1000)
+
+        // The hybrid steers its ring by the low point over a window instead; see LowPointRegulator.
+        val regulator = if (lowLatencyRender) LowPointRegulator(negotiatedRate, captureInEngineFrames) else null
+        val padding = IntByReference()
 
         // Pre-roll one buffer of silence: an exclusive-mode render client started empty underruns
         // on its very first period.
-        if (rc.call(3, frames, pp) == 0) rc.call(4, frames, 0)
+        if (rc.call(3, frames, pp) == 0 && rc.call(4, frames, 0) == 0) written = frames.toLong()
         ac.start()
 
         while (running) {
@@ -878,15 +1099,32 @@ internal class WasapiStream(
 
             // Exclusive: one whole buffer per event, which is that mode's contract. Endpoints that
             // do not honour it are refused at open rather than worked around here — see
-            // WasapiBackend.accepts.
+            // WasapiBackend.acceptedSize.
             //
             // Shared: the engine wakes us every *period*, which is smaller than the buffer, so the
             // whole buffer is never free. Writing it anyway is what starved this to 73 % of realtime
             // with a thousand xruns; the free space is what may be written, and asking for it is the
             // documented contract in this mode rather than the workaround it would be in exclusive.
-            val want = if (shared) frames - ac.currentPadding() else frames
+            // GetCurrentPadding through a reference made once: this runs every couple of
+            // milliseconds on the hybrid, and the convenience method allocates one per call.
+            val want = if (shared) {
+                if (ac.call(6, padding) != 0) continue
+                frames - padding.value
+            } else frames
             if (want <= 0) continue
             if (rc.call(3, want, pp) != 0) { xruns++; continue }
+            // At the wake and before this period is written, so a device holding exactly what it
+            // reports reads one buffer — the Pocket Master did, to the frame. Settled first: the
+            // first periods are the pipeline filling, not its depth.
+            if (clock != null && taken < QUEUE_SAMPLES && ++wakes > SETTLE_WAKES && wakes % 4 == 0) {
+                if (clock.call(4, position, qpcAt) == 0) {
+                    queue[taken++] = written - (position.getLong(0).toDouble() * negotiatedRate / clockHz).toLong()
+                    if (taken == QUEUE_SAMPLES) {
+                        queue.sort()
+                        measuredQueueFrames = queue[QUEUE_SAMPLES / 2].toInt()
+                    }
+                }
+            }
             val buf = pp.value
             val t0 = System.nanoTime()
             // Steady state only; the ring is still filling for the first few periods.
@@ -924,19 +1162,37 @@ internal class WasapiStream(
             // one frame added or dropped per period is ~340 ppm of authority against real drift of
             // tens of ppm, and is inaudible where a whole dropped block would not be.
             var r = ringRead
-            val available = ringWrite - r
+            var available = ringWrite - r
             var skip = 0
-            if (available > want * 3) { skip = 1; driftCorrections++ }
-            // The ring is empty until the capture side has produced its first period, so the first
-            // few render callbacks legitimately have nothing to play. Counting those as xruns would
-            // report a dropout on every single start, which trains the user to ignore the counter.
-            if (available >= want) primed = true
-            if (primed && available < want) xruns++
+            var hold = false
+            if (regulator != null) {
+                regulator.decide(available, want)
+                skip = regulator.drop
+                hold = regulator.hold
+                if (regulator.underrun) xruns++
+                if (skip > 0 || hold) driftCorrections++
+                primed = regulator.primed
+            } else {
+                val ceiling = if (shared) want * 3 else ringCeiling
+                // The ring is empty until the capture side has produced its first period, so the first
+                // few render callbacks legitimately have nothing to play. Counting those as xruns would
+                // report a dropout on every single start, which trains the user to ignore the counter.
+                if (!primed && available >= want) {
+                    // A capture stream that started first has queued audio the render side never saw;
+                    // left there it is latency for the life of the stream, drained a frame a period.
+                    // Nothing has been heard yet, so cut it to the ceiling in one go.
+                    if (!shared && available > ceiling) { r += available - ceiling; available = ceiling }
+                    primed = true
+                }
+                if (available > ceiling) { skip = 1; driftCorrections++ }
+                if (primed && available < want) xruns++
+                if (available in want until want + 2) { hold = true; driftCorrections++ }
+            }
             r += skip
             for (i in 0 until want) {
                 inputBlock[i] = if (r != ringWrite) ring[r++ and ringMask] else 0f
             }
-            if (available in want until want + 2) { r--; driftCorrections++ }   // hold one frame back
+            if (hold) r--   // hold one frame back: it is read again next time
             ringRead = r
 
             callback.render(inputBlock, outputBlock, want)
@@ -946,11 +1202,43 @@ internal class WasapiStream(
                 for (c in 0 until channels) writeSample(buf, f * channels + c, bits, isFloat, v)
             }
             rc.call(4, want, 0)
+            written += want
 
             val spent = System.nanoTime() - t0
             if (spent > periodNanos) deadlineMisses++
             val micros = (spent / 1_000L).toInt()
             if (micros > worstCallbackMicros) worstCallbackMicros = micros
+        }
+    }
+
+    internal companion object {
+        /** Clock readings in the hidden-delay median; one every fourth wake, so a few hundred ms. */
+        const val QUEUE_SAMPLES = 32
+
+        /** Wakes before the first reading, for the pipeline to fill. */
+        const val SETTLE_WAKES = 100
+
+        /** Hidden delay below this is the clock's own jitter, not worth a correction. */
+        const val HIDDEN_FLOOR_MS = 2
+
+        /**
+         * Frames the output holds beyond what [base] reports, given [queuedFrames] written and not
+         * played by the driver's clock (-1 when not measured). Zero under [HIDDEN_FLOOR_MS].
+         */
+        fun hiddenOutputFrames(base: StreamFormat, queuedFrames: Int): Int {
+            if (queuedFrames < 0) return 0
+            val hidden = queuedFrames - base.outputLatencyFrames
+            return if (hidden.toLong() * 1000 < HIDDEN_FLOOR_MS.toLong() * base.sampleRate) 0 else hidden
+        }
+
+        /** [base] with the hidden part added to its output latency and named. */
+        fun withHiddenOutput(base: StreamFormat, queuedFrames: Int): StreamFormat {
+            val hidden = hiddenOutputFrames(base, queuedFrames)
+            if (hidden == 0) return base
+            return base.copy(
+                outputLatencyFrames = base.outputLatencyFrames + hidden,
+                hiddenOutputLatencyFrames = hidden,
+            )
         }
     }
 

@@ -43,6 +43,9 @@ internal object WasapiIds {
     val IID_IAudioRenderClient: Guid.GUID = Guid.GUID.fromString("{F294ACFC-3146-4483-A7BF-ADDCA7C260E2}")
     val IID_IAudioCaptureClient: Guid.GUID = Guid.GUID.fromString("{C8ADBD64-E71E-48A0-A4DE-185C395CD317}")
 
+    /** GetFrequency at slot 3, GetPosition at 4: where the device says it is, in its own units. */
+    val IID_IAudioClock: Guid.GUID = Guid.GUID.fromString("{CD63314F-3FBA-4A1B-812C-EF96358728E7}")
+
     const val RENDER = 0
     const val CAPTURE = 1
     const val DEVICE_STATE_ACTIVE = 0x1
@@ -240,15 +243,17 @@ internal class AudioClient(p: Pointer) : ComObject(p) {
      * | SteelSeries Arctis 1 (in) | 480 | 480 | 480 | 480 |
      * | SteelSeries Arctis 1 (out) | 441 | 441 | 441 | 441 |
      * | ESS SABRE HiFi (out) | 480 | 1 | 336 | 480 |
+     * | Cirrus Logic XU SoundWire Line Out (2026-11-17, another laptop) | 480 | 16 | 96 | 480 |
      *
-     * Only the ESS SABRE reports room below its default, and `InitializeSharedAudioStream` at 336
-     * still handed back the same 1056-frame buffer the ordinary path gets. A low-latency shared mode
-     * needs a driver written for it; the API being present says nothing about that. Shared mode's
-     * ~66 ms therefore stands, and ASIO remains the fast path.
+     * On the first machine only the ESS SABRE reports room below its default, and
+     * `InitializeSharedAudioStream` at 336 still handed back the same 1056-frame buffer the ordinary
+     * path gets. A low-latency shared mode needs a driver written for it; the API being present says
+     * nothing about that. The Cirrus output has one: at 96 frames its own clock showed 2.4 ms queued,
+     * against 102 ms in exclusive mode. That is what the WASAPI hybrid's output uses; the shared
+     * backend still does not, so its ~66 ms stands.
      *
-     * Kept, along with [initializeSharedAudioStream], because this measurement is the answer to "can
-     * shared mode go faster on machine X" and the call is how you take it — see the
-     * `-Domega.wasapi.debug` branch in `WasapiBackend.probeShared`.
+     * The `-Domega.wasapi.debug` branch in `WasapiBackend.probeShared` prints these figures for any
+     * machine — the answer to "can shared mode go faster here".
      */
     fun sharedModeEnginePeriod(wfx: Pointer): IntArray? {
         val d = IntByReference(); val f = IntByReference(); val min = IntByReference(); val max = IntByReference()
@@ -256,7 +261,11 @@ internal class AudioClient(p: Pointer) : ComObject(p) {
         return intArrayOf(d.value, f.value, min.value, max.value)
     }
 
-    /** Initialises shared mode at an explicit period in frames. Event-driven, like the other path. */
+    /**
+     * Initialises shared mode at an explicit period in frames. Event-driven, like the other path.
+     * Takes `EVENTCALLBACK` alone: `NOPERSIST`, which `Initialize` accepts, is refused here with
+     * AUDCLNT_E_INVALID_STREAM_FLAG.
+     */
     fun initializeSharedAudioStream(flags: Int, periodInFrames: Int, wfx: Pointer): Int =
         call(20, flags, periodInFrames, wfx, Pointer.NULL)
 

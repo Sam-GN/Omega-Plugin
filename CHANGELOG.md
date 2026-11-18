@@ -9,6 +9,110 @@ unverified, it says so.
 
 ---
 
+## [2.2.2-beta] — 2026-11-17
+
+### Changed — the build always uses Temurin 21
+
+Nothing changes in the program you download: releases were already built and bundled with
+Temurin. The build itself now asks for Temurin by name instead of any Java 21. On a machine with
+IntelliJ installed, "any Java 21" had been JetBrains' own runtime, so the program run from the
+source behaved differently from the one users get. Maximising the window at 200 % display scaling
+made it twice the size of the screen, and a bundle built there would have shipped that runtime.
+Where Temurin is missing, the build downloads it once.
+
+---
+
+## [2.2.1-beta] — 2026-11-17
+
+### Fixed — WASAPI exclusive showed 14 ms on an output that was over 100 ms behind
+
+The latency on the transport line comes from what the driver reports, and a driver can hold more
+than it reports. A Cirrus Logic SoundWire laptop output in exclusive mode reported a 4 ms buffer,
+so the round trip read 14 ms, while its own clock showed about 105 ms of audio written and not yet
+played.
+
+Shortly after Start, WASAPI exclusive now reads the output's clock a few dozen times and compares
+it with what has been written. Anything held beyond the reported figure is added to the round trip,
+and the tooltip says how much came from the clock rather than from the report. On that laptop the
+line now reads about 121 ms. When the hidden part is 20 ms or more, the status line says so once
+and suggests WASAPI hybrid. An output that holds what it reports, such as a Pocket Master's,
+shows the same figure as before.
+
+This is still the driver's account, from its clock instead of its report. A lead from output to
+input and `--measure` is the only measurement that is not.
+
+---
+
+## [2.2.0-beta] — 2026-11-17
+
+### Added — WASAPI hybrid: the input exclusive, the output shared at its shortest period
+
+A new choice in the driver picker, between WASAPI exclusive and WASAPI shared. The input — your
+guitar interface — opens exclusively, as fast as its driver allows. The output goes through the
+Windows mixer, but at the shortest period the device offers instead of the usual 10 ms.
+
+It exists because, on some laptops, exclusive mode is the slow way out. A Cirrus Logic SoundWire
+output reported a 4 ms buffer in exclusive mode while its own clock showed 102 ms of audio written
+and not yet played, at every buffer size and on both of its outputs. The program could not ask the
+exclusive path for anything that changed it. Through the mixer at a 2 ms period, the same clock
+showed 2.4 ms. On that laptop the hybrid reports a 15 ms round trip, and this time the number is
+not hiding anything behind it.
+
+Because the output is shared, other sound plays through it too: a backing track from a browser or a
+music player comes out of the same speakers as the guitar. The Windows volume control applies to
+Omega's output, and the output runs at whatever rate Windows has it set to, so an interface that
+cannot do that rate is converted on the way in (the C mark), as before.
+
+An output with no short period to offer, which is most of them, still works, at the ordinary
+shared period, and is then no faster than WASAPI shared. Exclusive and shared are unchanged, and
+nothing is switched to the hybrid unless you choose it.
+
+The buffer between the two devices works differently here. The output takes a few dozen frames
+every couple of milliseconds while the input arrives a packet at a time, so the hybrid steers the
+lowest level the buffer reaches, not the level at one moment. It starts 2 ms above empty and moves
+up half a millisecond whenever that was not enough, up to 10 ms. When the input stalls and then
+delivers everything at once, the backlog is cut at once instead of being worked off over seconds.
+
+Measured with `--selftest` on the laptop above, with a Sonicake Pocket Master as the input: clean
+between stalls, but the Pocket Master's input stopped for 100–180 ms every ten to thirty seconds,
+which shows as a burst of dropouts. Paired with its own output it hides this, because both of its
+directions pause together. The stall is on the input's side in every mode, and the hybrid does not
+cure it. That laptop was on battery, on the Balanced plan, with USB selective suspend on; whether
+mains power and a performance plan clear it was not tried. Not measured with `--measure`.
+
+---
+
+## [2.1.5-beta] — 2026-11-17
+
+### Fixed — WASAPI exclusive refused some laptop outputs at 44.1 kHz
+
+A Cirrus Logic SoundWire output on a Windows 11 laptop would not start in exclusive mode at
+44.1 kHz — "has no usable buffer size … its driver does not honour any size offered" — although the
+same hardware works on other laptops and 48 kHz worked on this one. Before offering a buffer size,
+Omega opens the device with it to check that the driver really grants it. It asked for each size as
+a length of time rounded down, and at 44.1 kHz almost no size is a whole number of those units, so
+a driver that also rounds down granted one frame less than asked and every size was refused. The
+time is now rounded up, by less than a hundredth of a frame, which comes back to the size asked for
+whichever way the driver rounds. A driver that answers "not aligned" with the size it wants now has
+that size tried too, as starting a stream already did.
+
+Confirmed on the laptop that showed it: 44.1 kHz now opens there.
+
+### Changed — less latency hidden between two WASAPI exclusive devices
+
+With different devices for input and output, a buffer between the two clocks takes up the
+difference. It was allowed to fill to three output buffers before it was trimmed, while the latency
+shown counted one. If the input clock ran slightly fast, or the input started before the output,
+up to two buffers' worth stayed there for the whole session, unreported. The buffer is now held to
+what it actually needs — one output buffer, plus one input packet, plus a small margin — and any
+extra the input queued while the stream started is dropped before anything is heard. Shared mode
+is unchanged.
+
+Not measured with `--measure`; the saving depends on the pair of devices and is at most two output
+buffers.
+
+---
+
 ## [2.1.4-beta] — 2026-11-02
 
 ### Fixed — the tuner could stop working after the driver changed its sample rate

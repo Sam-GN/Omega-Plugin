@@ -251,6 +251,15 @@ Kept rather than deleted, because a record of what was open is part of what this
   the player; `dsp/Resampler.kt` matches the capture's rate for 65 frames (1.47 ms), on by default
   and switchable from the NAM module's `⋮` menu, where the cost is stated beside the choice.
 
+- **WASAPI exclusive shows the delay a driver hides, 2.2.1-beta.** The output's own clock is read
+  after Start, and what it holds beyond the report is added to the round trip shown.
+- **WASAPI hybrid, 2.2.0-beta.** The input exclusive and the output shared at `IAudioClient3`'s
+  shortest period: on a Cirrus Logic laptop output whose exclusive path held 102 ms behind its own
+  clock, a 15 ms round trip, with other sound able to play alongside. Exclusive and shared are as
+  they were.
+- **WASAPI exclusive on more laptops, and less hidden latency, 2.1.5-beta.** Buffer sizes at 44.1 kHz
+  are no longer lost to a rounding error, a driver asking for an aligned size gets it, and the ring
+  between two devices holds at most one packet over what it needs instead of up to two periods.
 - **The tuner, lighter and sturdier, 2.1.4-beta.** The same readings for about a seventh of the
   processor, and a driver changing its rate can no longer stop it.
 - **A tuner, 2.1.0-beta.** On the rhythm row: the string heard, a lamp each way for flat and sharp,

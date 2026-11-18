@@ -130,7 +130,20 @@ check — see "Check for updates" below. The three:
     mono float in and out. `Backends` is the registry and the fallback ladder.
   - `audio/asio/` — the primary path on Windows. `IASIO` is reached by walking its COM vtable by
     hand through JNA; there is no Steinberg SDK and there must never be one (licence).
-  - `audio/wasapi/` — exclusive, event-driven, two endpoints and two clocks.
+  - `audio/wasapi/` — exclusive, event-driven, two endpoints and two clocks. Three backends from
+    one class, a mode per direction: exclusive, shared, and since 2.2.0 **hybrid** — the input
+    exclusive, the output shared at `IAudioClient3`'s shortest period (`WasapiHybridBackend`).
+    Hybrid exists because an exclusive output can hide latency: a Cirrus Logic SoundWire laptop
+    output reported a 4 ms buffer while its own `IAudioClock` showed 102 ms written and not played,
+    at every size, and 2.4 ms through the engine at 96 frames. **Exclusive and shared must not be
+    moved onto hybrid's rules**; it is a separate choice so no working machine changes. Its ring is
+    steered by `LowPointRegulator` (the lowest level over a window, not the level at one wake),
+    tested against simulated clocks in `LowPointRegulatorTest`. Since 2.2.1 exclusive also
+    **reports** that hidden delay: the render thread reads `IAudioClock` 32 times after 100 settled
+    wakes (preallocated, before the period is written), and `WasapiStream.format` adds the median
+    excess over the reported output latency as `StreamFormat.hiddenOutputLatencyFrames`. The window
+    polls `format`, so no event is fired — `onFormatChanged` re-prepares the chain and must not be
+    used for a figure that changes nothing the DSP sees.
   - `audio/jack/` — Linux's primary path, and PipeWire's through its JACK library. One clock, the
     server's realtime thread, so it is shaped like ASIO. Each client owning hardware ports is a
     device. `JackLibrary` tries PipeWire's shim **by path** before the system `libjack.so.0` when
@@ -339,7 +352,11 @@ sees a JACK entry and the Windows picker is exactly what it was before Linux exi
   ASIO's granularity encoding (-1 powers of two, 0 preferred-only, positive step) is in
   `legalBufferSizes`, which has tests.
 - **Never round-trip a frame count through 100 ns units to compare it.** 264 frames at 44.1 kHz is
-  59 863 945.578 units, which comes back as 263. Keep the frame count you asked for.
+  59 863 945.578 units, which comes back as 263. Keep the frame count you asked for. The same
+  arithmetic bites the driver: a duration *handed to* `Initialize` must be rounded **up**
+  (`hnsForFrames`), because a truncated one — or one rounded to nearest, as Microsoft's sample
+  does — can be a hair short, and a driver that floors grants a frame less. At 44.1 kHz that
+  refused every size on a Cirrus Logic SoundWire output until 2.1.5.
 - **The engine runs at the output's rate; only the input is ever converted.** See `SampleRates`.
   On a two-clock backend that sets `convertsInput` (WASAPI, both modes) the picker offers the
   output's rates, and one the input cannot do is marked `C`: the capture endpoint opens at its own
@@ -854,8 +871,13 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Constraints and known limits
 
-- `jvmToolchain(21)` — see the collector note under Build and run. The foojay resolver in
-  `settings.gradle.kts` auto-provisions a JDK 21, so local `JAVA_HOME` need not be 21.
+- **Java 21 from Temurin**, `omegaToolchain` in `build.gradle.kts` — see the collector note under
+  Build and run. The foojay resolver in `settings.gradle.kts` downloads it where it is missing, so
+  local `JAVA_HOME` need not be 21. The vendor is pinned (2.2.2) because the releases are Temurin
+  and "any 21" on a machine with IntelliJ is the JetBrains Runtime: `gradlew run` then maximised
+  the window to twice the screen at 200 % scaling while the release did not, and a local bundle
+  would have shipped JBR. Every toolchain lookup — compile, run, jlink, jpackage, provenance — goes
+  through that one spec; a new one must too.
 - Kotlin 2.1.20, `mavenCentral()` only. **JNA is the one runtime dependency, taken under LGPL 2.1**
   rather than the Apache 2.0 it is also offered under — this project is GPLv3-or-later and either
   would do, but a dual licence has to be elected once and written down, and it is: in README.md, in
@@ -952,7 +974,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-510 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+523 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

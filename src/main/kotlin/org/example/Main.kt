@@ -940,6 +940,12 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
             if (it.adapterLatencyFrames > 0) " + ${it.adapterLatencyFrames} this adapter added" else "",
             it.sampleRate,
         ))
+        if (it.hiddenOutputLatencyFrames > 0) {
+            println(String.format(
+                "hidden output   : %.2f ms of the output (%d frames) the driver did not report, read from its own clock",
+                it.hiddenOutputLatencyFrames * 1000f / it.sampleRate, it.hiddenOutputLatencyFrames,
+            ))
+        }
     }
     println(String.format("realtime ratio  : %.4f — frames the device got vs frames the clock asked for", ratio))
     println(String.format("deadline misses : %d (%.2f/s) — callbacks that overran their own period", misses, misses / elapsed))

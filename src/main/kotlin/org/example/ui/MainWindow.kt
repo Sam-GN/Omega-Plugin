@@ -26,6 +26,7 @@ import org.example.audio.Backends
 import org.example.audio.DeviceCapabilities
 import org.example.audio.Pairing
 import org.example.audio.SampleRates
+import org.example.audio.StreamFormat
 import org.example.audio.StreamRequest
 import org.example.audio.Recorder
 import org.example.audio.linux.LinuxPlatform
@@ -212,6 +213,9 @@ class MainWindow : JFrame("Omega-Plugin") {
         toolTipText = "<html>Which audio driver model to use.<br>" +
             "ASIO is the lowest latency and needs a driver from your interface's maker.<br>" +
             "WASAPI exclusive takes sole control of the device.<br>" +
+            "WASAPI hybrid keeps the input exclusive and shares the output at its shortest period,<br>" +
+            "so other sound can play alongside — and on some laptops it is the faster of the two.<br>" +
+            "WASAPI shared leaves both devices to the Windows mixer.<br>" +
             "Java Sound always works and is never fast.</html>"
         renderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
@@ -1394,6 +1398,9 @@ class MainWindow : JFrame("Omega-Plugin") {
      * measured rather than assumed because the driver keeps a lead of its own on top of what the
      * engine primes.
      */
+    /** The stream format whose hidden output delay the status line has already mentioned. */
+    private var reportedHiddenFormat: StreamFormat? = null
+
     private fun updateTransport() {
         val format = engine.format
         if (!engine.isRunning || format == null) {
@@ -1427,9 +1434,28 @@ class MainWindow : JFrame("Omega-Plugin") {
             if (dropouts == 1) "" else "s",
         )
         transport.foreground = if (dropouts == 0) Theme.TEXT_DIM else Theme.BAD
+        // An output that holds far more than it reports (2.2.1). Said once a stream, and only when
+        // it is worth a player's attention, because the cure is a different driver choice.
+        val hiddenMs = format.hiddenOutputLatencyFrames * 1000f / format.sampleRate
+        if (hiddenMs >= HIDDEN_WORTH_SAYING_MS && format !== reportedHiddenFormat) {
+            reportedHiddenFormat = format
+            setStatus(
+                String.format(
+                    "This output holds %.0f ms more than its driver reports, so the round trip is %.0f ms. " +
+                        "WASAPI hybrid avoids it on most laptop outputs.",
+                    hiddenMs, format.reportedRoundTripMs,
+                ),
+                Theme.BAD,
+            )
+        }
         transport.toolTipText = String.format(
             "<html><b>%.1f ms round trip as %s reports it</b> — in %d + out %d frames" +
                 "%s, at %d Hz.<br>" +
+                (if (format.hiddenOutputLatencyFrames > 0) {
+                    "Of the output, ${format.hiddenOutputLatencyFrames} frames " +
+                        "(${String.format("%.1f", hiddenMs)} ms) are delay the driver did not report, " +
+                        "read from its own clock.<br>"
+                } else "") +
                 "Driver safety offsets are included; converter latency is not, so treat it as a " +
                 "good estimate rather than the truth.<br>" +
                 "Callback period %.2f ms (%d frames). DSP is using %.0f%% of it, worst %.2f ms.<br>" +
@@ -3551,5 +3577,8 @@ class MainWindow : JFrame("Omega-Plugin") {
          * 0.9999, so the line falls between the two rather than being a round number.
          */
         const val STARVING_BELOW = 0.995f
+
+        /** Hidden output delay the status line names; under this, the tooltip alone carries it. */
+        const val HIDDEN_WORTH_SAYING_MS = 20f
     }
 }

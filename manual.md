@@ -170,6 +170,7 @@ status line.
 | --- | --- | --- |
 | **ASIO** | Windows | The lowest delay by a wide margin. Needs the driver from your interface's maker. The interface is both input and output, so choosing it under INPUT fills in OUTPUT too. |
 | **WASAPI exclusive** | Windows | No extra driver needed. The program takes sole control of the device while running, so other programs cannot play sound through it. The next best after ASIO. |
+| **WASAPI hybrid** | Windows | Your interface's input is taken exclusively, as above, and the output goes through Windows at the shortest delay the device allows, so other programs can play through it too: play along to a song from your browser. On some laptops this is faster than exclusive, whose built-in outputs can hold back 100 ms that no setting reports. If exclusive feels slow through your computer's own headphone jack, try this. The Windows volume control affects the output here. |
 | **JACK / PipeWire** | Linux | The Linux equivalent of ASIO. Needs the `pipewire-jack` package, or a running jackd. |
 | **ALSA** | Linux | Always available. The entry called `Default` goes through the sound server and lets other programs keep playing. The entries marked `(direct)` go straight to the card and are faster, but only when nothing else is using it. |
 | **WASAPI shared** | Windows | Lets other programs keep using the device, at the cost of roughly 66 ms of delay. For checking things, not for playing. |
@@ -944,6 +945,12 @@ apart. Use a bigger buffer, the same device both ways, or ASIO.
 cannot run in exclusive mode at all; HDMI outputs on some graphics cards are known for it. The program
 says so rather than playing badly. Use another device or WASAPI shared for that one.
 
+**WASAPI exclusive shows over 100 ms through the laptop's own jack, and the status line says the
+output holds more than its driver reports.** Some built-in laptop outputs hold back about a tenth of
+a second in exclusive mode without reporting it. The program reads the output's own clock shortly
+after Start and adds what it finds to the figure shown, so the number is the real one. Choose
+WASAPI hybrid, which keeps the input exclusive and sends the output the faster way.
+
 **A preset's LOAD button is red.** The NAM capture or impulse response it wants has moved. Click the
 button and find the file. The rest of the preset is already in place.
 
@@ -1047,6 +1054,7 @@ metronome.
 **Split.** Two boards fed the same guitar and heard together.
 
 **WASAPI.** Windows' own sound system. Exclusive mode gives the program sole use of a device and low
-delay; shared mode leaves it available to other programs at higher delay.
+delay; shared mode leaves it available to other programs at higher delay; hybrid takes the input
+exclusively and shares the output at the shortest delay the output allows.
 
 **Xrun.** A dropout reported by the driver, counted in the health readout.

@@ -35,8 +35,9 @@ package org.example.audio.wasapi
  *   1056 at 48 — 22 ms either way, on every one of seventeen endpoints — for a 65.99 ms round trip.
  *   That is why this can never be the fast path.
  *
- * `IAudioClient3` is the documented way to ask for a shorter period, and it does not help here: see
- * [AudioClient.sharedModeEnginePeriod], where the measured periods are recorded. Every endpoint
- * answers, and every one that matters answers `minimum == default`.
+ * `IAudioClient3` is the documented way to ask for a shorter period, and it did not help on the
+ * machine this was written on: see [AudioClient.sharedModeEnginePeriod], where the measured periods
+ * are recorded. Where a driver does offer one, [WasapiHybridBackend] takes it for its output; this
+ * backend keeps the ordinary period both ways, as it always has.
  */
 class WasapiSharedBackend : WasapiBackend(WasapiIds.SHARED)

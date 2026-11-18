@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "org.example"
-version = "2.1.4-beta"
+version = "2.2.2-beta"
 
 repositories {
     mavenCentral()
@@ -26,12 +26,28 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
+/**
+ * The one JDK this project builds, runs and bundles with: Java 21 from Temurin.
+ *
+ * 21, not 11: generational ZGC is the whole reason. Measured at a 64-frame ASIO buffer under
+ * allocation pressure, G1 lost 1.15 % of realtime with a worst callback gap of 17.1 ms while
+ * generational ZGC lost 0.01 % with a worst gap of 4.1 ms. At a 1.45 ms period that difference is
+ * audible clicks versus none.
+ *
+ * Temurin, not "any 21" (2.2.2): the release workflows build on Temurin, so that is the runtime
+ * users get, and an unpinned toolchain took whatever 21 the machine had. On a machine with IntelliJ
+ * that was the JetBrains Runtime, whose Windows window handling differs: `gradlew run` maximised
+ * the undecorated frame to twice the screen at 200 % scaling while the release maximised
+ * correctly, a local `exeZip` would have bundled JBR, and `runtimeProvenance` would have named it.
+ * The foojay resolver in settings.gradle.kts downloads Temurin where it is missing.
+ */
+val omegaToolchain = Action<JavaToolchainSpec> {
+    languageVersion.set(JavaLanguageVersion.of(21))
+    vendor.set(JvmVendorSpec.ADOPTIUM)
+}
+
 kotlin {
-    // 21, not 11: generational ZGC is the whole reason. Measured at a 64-frame ASIO buffer under
-    // allocation pressure, G1 lost 1.15 % of realtime with a worst callback gap of 17.1 ms while
-    // generational ZGC lost 0.01 % with a worst gap of 4.1 ms. At a 1.45 ms period that difference
-    // is audible clicks versus none.
-    jvmToolchain(21)
+    jvmToolchain(omegaToolchain)
 }
 
 /**
@@ -242,9 +258,7 @@ val portableRuntime by tasks.registering(Exec::class) {
     // No declared inputs beyond the toolchain, so let the up-to-date check rest on the output tree.
     outputs.dir(portableRuntimeDir)
     doFirst {
-        val jdkHome = javaToolchains.launcherFor {
-            languageVersion.set(JavaLanguageVersion.of(21))
-        }.get().metadata.installationPath.asFile
+        val jdkHome = javaToolchains.launcherFor(omegaToolchain).get().metadata.installationPath.asFile
         val jlink = listOf("bin/jlink.exe", "bin/jlink")
             .map { jdkHome.resolve(it) }
             .firstOrNull { it.isFile }
@@ -363,9 +377,7 @@ data class RuntimeProvenance(val build: String, val vendor: String, val source: 
  * read-me with a hole in it.
  */
 fun runtimeProvenance(): RuntimeProvenance {
-    val jdkHome = javaToolchains.launcherFor {
-        languageVersion.set(JavaLanguageVersion.of(21))
-    }.get().metadata.installationPath.asFile
+    val jdkHome = javaToolchains.launcherFor(omegaToolchain).get().metadata.installationPath.asFile
     val release = jdkHome.resolve("release")
     if (!release.isFile) error("No release file in the Java 21 toolchain at $jdkHome; cannot name the bundled runtime")
     val fields = release.readLines().mapNotNull { line ->
@@ -569,9 +581,7 @@ val exeImage by tasks.registering(Exec::class) {
     inputs.property("appVersion", exeVersion)
     outputs.dir(exeImageDir)
     doFirst {
-        val jdkHome = javaToolchains.launcherFor {
-            languageVersion.set(JavaLanguageVersion.of(21))
-        }.get().metadata.installationPath.asFile
+        val jdkHome = javaToolchains.launcherFor(omegaToolchain).get().metadata.installationPath.asFile
         val jpackage = listOf("bin/jpackage.exe", "bin/jpackage")
             .map { jdkHome.resolve(it) }
             .firstOrNull { it.isFile }

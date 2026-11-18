@@ -49,8 +49,14 @@ enum class BackendId(val displayName: String, val rank: Int) {
      */
     JACK("JACK / PipeWire", 1),
 
-    /** Linux's always-present rung: the sound server through `default`, or a card directly. */
-    ALSA("ALSA", 2),
+    /** Linux's always-present rung: the sound server through `default`, or a card d/**
+     * WASAPI with the input exclusive and the output shared at `IAudioClient3`'s shortest period
+     * (2.2.0). For an output whose exclusive path is slower than its shared one — a Cirrus Logic
+     * SoundWire laptop output held 102 ms behind its own clock in exclusive mode and 2.4 ms shared —
+     * and for playing along with something else on the computer. Ranked under exclusive so no
+     * machine is moved onto it by default; shares ALSA's rank because the two never meet.
+     */
+    WASAPI_HYBRID("WASAPI hybrid", 2),
 
     /**
      * The same API as [WASAPI_EXCLUSIVE], through the Windows mixer instead of around it.
@@ -170,6 +176,13 @@ data class StreamFormat(
      * converting the input, which the picker marks with a `C` and the status line explains.
      */
     val inputRate: Int = sampleRate,
+    /**
+     * Output delay the driver did not report, measured from its own clock and already included in
+     * [outputLatencyFrames]. Zero unless measured. WASAPI exclusive only (2.2.1): a Cirrus Logic
+     * SoundWire output reported a 4 ms buffer while its `IAudioClock` stood 102 ms behind what had
+     * been written, so the number on screen said 14 ms and the player heard over 100.
+     */
+    val hiddenOutputLatencyFrames: Int = 0,
 ) {
     val inputConverted: Boolean get() = inputRate != sampleRate
 
