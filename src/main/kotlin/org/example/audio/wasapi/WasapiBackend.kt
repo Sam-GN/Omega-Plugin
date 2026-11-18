@@ -667,8 +667,21 @@ internal class WasapiStream(
 
     private val ready = java.util.concurrent.CountDownLatch(2)
 
-    /** What the stream opened with, as the driver reported it. */
-    @Volatile private var baseFormat: StreamFormat = StreamFormat(request.sampleRate, request.bufferFrames, 0, 0, 0)
+    /**
+     * What the stream opened with, as the driver reported it; before [start], what the engine
+     * prepares the chain for.
+     *
+     * An exclusive output writes exactly its buffer at every wake, and that size is chosen in `open`,
+     * so it is what the chain is prepared for — not BUFFER, which an output that does not offer it
+     * replaces with its nearest size: an AORUS asked for 144 runs at 192 (2.2.4). A shared output's
+     * size is not known until its client exists on the render thread, and its blocks vary with the
+     * free space; the engine processes any that exceed BUFFER in pieces.
+     */
+    @Volatile private var baseFormat: StreamFormat = StreamFormat(
+        request.sampleRate,
+        if (renderShared) request.bufferFrames else renderTargetFrames,
+        0, 0, 0,
+    )
 
     /**
      * Frames written and not yet played, by the driver's own clock: the median of [QUEUE_SAMPLES]
@@ -1164,10 +1177,14 @@ internal class WasapiStream(
             var available = ringWrite - r
             var skip = 0
             var hold = false
+            // Frames to take from the ring; the rest of the wake is silence. The hybrid's regulator
+            // says how many (2.2.4); the other modes read what there is.
+            var take = want
             if (regulator != null) {
                 regulator.decide(available, want)
                 skip = regulator.drop
                 hold = regulator.hold
+                take = regulator.read
                 if (regulator.underrun) xruns++
                 if (skip > 0 || hold) driftCorrections++
                 primed = regulator.primed
@@ -1188,9 +1205,10 @@ internal class WasapiStream(
                 if (available in want until want + 2) { hold = true; driftCorrections++ }
             }
             r += skip
-            for (i in 0 until want) {
+            for (i in 0 until take) {
                 inputBlock[i] = if (r != ringWrite) ring[r++ and ringMask] else 0f
             }
+            for (i in take until want) inputBlock[i] = 0f
             if (hold) r--   // hold one frame back: it is read again next time
             ringRead = r
 

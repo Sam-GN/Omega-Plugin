@@ -36,7 +36,7 @@ package org.example.audio.wasapi
  * already cost a dropout and a frame a wake would take seconds.
  *
  * Called once per render wake, on the render thread: no allocation, no locks. The outcome of a call
- * is in [drop], [hold] and [underrun] until the next. `LowPointRegulatorTest` drives it with
+ * is in [drop], [read], [hold] and [underrun] until the next. `LowPointRegulatorTest` drives it with
  * simulated clocks.
  */
 internal class LowPointRegulator(rate: Int, capturePacketFrames: Int) {
@@ -66,6 +66,14 @@ internal class LowPointRegulator(rate: Int, capturePacketFrames: Int) {
     var underrun = false
         private set
 
+    /**
+     * Frames to read from the ring this wake, after [drop]; the rest of the wake is silence. The
+     * whole wake normally. Nothing until [primed]. On an [underrun], what lies above a packet and the
+     * margin (2.2.4).
+     */
+    var read = 0
+        private set
+
     private var windowTaken = 0
     private var windowMin = Int.MAX_VALUE
     private var windowUnderran = false
@@ -76,18 +84,28 @@ internal class LowPointRegulator(rate: Int, capturePacketFrames: Int) {
         drop = 0
         hold = false
         underrun = false
+        read = want
         var avail = available
+        val start = want + packet + margin
         if (!primed) {
-            if (avail < want) return
+            // Nothing is read until the ring holds where it is to start from. Reading what there was
+            // at each wake, as until 2.2.4, kept it from filling: it primed at the first wake that
+            // happened to find a wake's worth, 87 frames over on the ordinary shared period, and the
+            // next wake with one packet behind it was 90 short.
+            if (avail < start) { read = 0; return }
             // Whatever the input queued before the output started, cut to where it would be held
             // anyway. Nothing has been heard yet.
-            val start = want + packet + margin
             if (avail > start) { drop = avail - start; avail = start }
             primed = true
         }
         if (avail < want) {
             underrun = true
             windowUnderran = true
+            // The gap is happening either way. Reading the ring to empty, as until 2.2.4, put the
+            // next wake on the same packet pattern the same distance short, and the frames held back
+            // since were thrown away with it: a dropout every third wake until the clocks drifted.
+            // Leaving a packet and the margin makes this one gap, no longer than the wake.
+            read = maxOf(avail - (packet + margin), 0)
         }
         val slack = avail - want
         if (slack < windowMin) windowMin = slack

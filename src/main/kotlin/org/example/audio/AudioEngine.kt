@@ -27,6 +27,7 @@ import org.example.dsp.tuner.Tuner
 import org.example.util.Log
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.min
 
 /**
  * The callback body, and nothing else.
@@ -106,6 +107,38 @@ class AudioEngine(
      * that never open a device, which is the headless tests.
      */
     private var scratch = FloatArray(DEFAULT_SCRATCH_FRAMES)
+
+    /**
+     * The block the chain was last prepared for, and the most frames any one pass hands it (2.2.4).
+     *
+     * A backend can call [render] with more than the size it reported before start: a shared WASAPI
+     * output writes whatever space is free, which on a 970-frame buffer is a period of 441, against
+     * a chain prepared for 264 — the NAM pedal's rate converter overflowed on the first period. A
+     * call larger than this is processed in pieces of this size, through [pieceIn] and [pieceOut],
+     * so no module is ever handed more than it sized itself for, whichever backend is calling.
+     * Unbounded until a stream prepares, for the headless callers that never open one.
+     */
+    @Volatile
+    private var preparedFrames = Int.MAX_VALUE
+    private var pieceIn = FloatArray(0)
+    private var pieceOut = FloatArray(0)
+
+    /**
+     * The handshake that keeps a re-prepare off a running chain (2.2.4).
+     *
+     * A driver that changes its format while the stream runs — ASIO's panel, a JACK server resized —
+     * reaches [prepareChain] on that backend's monitor thread, and `prepare` and `reset` swap and
+     * clear the very buffers a callback may be inside. So the preparer raises [holding] and waits for
+     * [inRender] to fall; the callback raises [inRender] before it reads [holding], and while holding
+     * it writes silence and touches nothing. Both are volatile, so one side always sees the other:
+     * either the callback sees the hold, or the preparer sees the callback and waits for it. The
+     * audio thread never waits for anything.
+     */
+    @Volatile
+    private var holding = false
+
+    @Volatile
+    private var inRender = false
 
     /**
      * True while the second board is still being run: split on, or its fade-out not finished yet.
@@ -285,7 +318,7 @@ class AudioEngine(
 
         val events = object : StreamEvents {
             override fun onFormatChanged(format: StreamFormat) {
-                prepareChain(format)
+                prepareWhileRunning(format)
                 this@AudioEngine.onFormatChanged?.invoke(format)
             }
 
@@ -358,7 +391,31 @@ class AudioEngine(
      * back 44 100 or 96 000 and the chain has to be right either way. It runs on the opening thread,
      * never on the audio thread — every allocation an effect needs happens here.
      */
+    /**
+     * [prepareChain] for a stream that is already running: holds the callback first, so nothing is
+     * prepared or reset while the audio thread is inside it. The callback writes silence for the few
+     * blocks this takes; a driver changing its format under a stream is a break in the sound anyway.
+     * Off the audio thread by definition — it waits.
+     */
+    private fun prepareWhileRunning(format: StreamFormat) {
+        holding = true
+        try {
+            // A callback stuck for this long is a stream that has died; preparing then is safe.
+            val deadline = System.nanoTime() + HOLD_WAIT_NANOS
+            while (inRender && System.nanoTime() < deadline) Thread.sleep(1)
+            prepareChain(format)
+        } finally {
+            holding = false
+        }
+    }
+
     private fun prepareChain(format: StreamFormat) {
+        val frames = format.bufferFrames.coerceAtLeast(1)
+        if (pieceIn.size < frames) {
+            pieceIn = FloatArray(frames)
+            pieceOut = FloatArray(frames)
+        }
+        preparedFrames = frames
         for (c in chains) {
             c.prepare(format.sampleRate.toFloat(), format.bufferFrames)
             c.reset()
@@ -557,6 +614,38 @@ class AudioEngine(
      * it is a QPC read at about 20 ns and the load meter is built on it.
      */
     override fun render(input: FloatArray, output: FloatArray, frames: Int) {
+        inRender = true
+        try {
+            if (holding) {
+                // A re-prepare is in progress on another thread: touch no module until it is done.
+                java.util.Arrays.fill(output, 0, frames, 0f)
+                return
+            }
+            val most = preparedFrames
+            if (frames <= most) {
+                renderBlock(input, output, frames)
+                return
+            }
+            // More than the chain was prepared for: in pieces of the prepared size. The input is
+            // copied out rather than read in place, because the body reads from index 0 and must
+            // never write into a backend's input buffer.
+            val pin = pieceIn
+            val pout = pieceOut
+            var offset = 0
+            while (offset < frames) {
+                val n = min(most, frames - offset)
+                System.arraycopy(input, offset, pin, 0, n)
+                renderBlock(pin, pout, n)
+                System.arraycopy(pout, 0, output, offset, n)
+                offset += n
+            }
+        } finally {
+            inRender = false
+        }
+    }
+
+    /** One block no larger than [preparedFrames]: the body [render] used to be. */
+    private fun renderBlock(input: FloatArray, output: FloatArray, frames: Int) {
         val t0 = System.nanoTime()
         var peak = 0f
 
@@ -680,6 +769,9 @@ class AudioEngine(
 
         /** Room for the second board before a device has said how big a block is. */
         const val DEFAULT_SCRATCH_FRAMES = 8192
+
+        /** How long a re-prepare waits for a callback to leave before going ahead regardless. */
+        const val HOLD_WAIT_NANOS = 2_000_000_000L
 
         /**
          * Enough to get every hot method through C1 into C2 — the tiered compilation threshold for

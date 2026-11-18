@@ -138,7 +138,12 @@ check — see "Check for updates" below. The three:
     at every size, and 2.4 ms through the engine at 96 frames. **Exclusive and shared must not be
     moved onto hybrid's rules**; it is a separate choice so no working machine changes. Its ring is
     steered by `LowPointRegulator` (the lowest level over a window, not the level at one wake),
-    tested against simulated clocks in `LowPointRegulatorTest`. Since 2.2.1 exclusive also
+    tested against simulated clocks in `LowPointRegulatorTest`. **The render loop reads only
+    `LowPointRegulator.read` frames** (2.2.4): nothing until the ring reaches a wake plus a packet
+    plus the margin, and on an underrun only what lies above a packet and the margin. Reading what
+    there was, as before, primed the ring 2 ms over and then emptied it at every underrun, which
+    repeated the shortfall every third wake on the shared fallback — 26 dropouts in 30 s on
+    Bluetooth earbuds, 0 after. The simulations read the ring the same way; keep them in step. Since 2.2.1 exclusive also
     **reports** that hidden delay: the render thread reads `IAudioClock` 32 times after 100 settled
     wakes (preallocated, before the period is written), and `WasapiStream.format` adds the median
     excess over the reported output latency as `StreamFormat.hiddenOutputLatencyFrames`. The window
@@ -276,8 +281,24 @@ of the stream and drops it on stop.
 per-stream monitor thread at normal priority — allowed to allocate and log — turns it into a
 `StreamEvents` call. That is what keeps the "no I/O on the audio thread" rule intact at the one
 moment it is most tempting to break it. `kAsioResetRequest`, which is what the user changing the
-buffer size in the driver's own control panel produces, arrives this way and is **not** an error:
-it becomes `onFormatChanged`, the UI mirrors it, and the stream keeps playing.
+buffer size in the driver's own control panel produces, arrives this way and is **not** an error.
+Since 2.2.4 `AsioStream.rebuild` answers it as the spec asks a host to: stop the driver, dispose
+the buffers, create them at the driver's current preferred size and rate, then `onFormatChanged`
+(the chain is prepared while nothing calls it), then start the driver. Everything the callback
+reads that a rebuild replaces is one immutable `Buffers` behind one volatile reference. Before
+that, only the chain was re-prepared while the old buffers kept running, and the UI showed a size
+that was not playing.
+
+**A module is never handed more than it was prepared for, and never prepared while it runs**
+(2.2.4). A backend may call `render` with more frames than the format it reported before start —
+a shared WASAPI output writes whatever is free, 441 frames into a chain prepared for 264, and the
+NAM converter overflowed — so `AudioEngine.render` processes any longer call in pieces of
+`preparedFrames`. A format change on a monitor thread goes through `prepareWhileRunning`: it
+raises `holding`, waits for `inRender` to fall, prepares, and lowers it; the callback raises
+`inRender` before reading `holding` and writes silence while held. Two volatiles, so one side
+always sees the other, and the audio thread never waits. A backend should still report the size
+it will run at when it knows it before start, as WASAPI exclusive now does, so no pieces are
+needed. `BlockSizeContractTest` holds both promises against a fake backend.
 
 **UI to audio** is unchanged and already correct: `Parameter.value` and `AudioProcessor.enabled` are
 `@Volatile`, so a knob turn is one unsynchronised store. Smaller blocks make that *better*, not
@@ -982,7 +1003,7 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-527 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+533 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`

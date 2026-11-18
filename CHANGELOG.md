@@ -9,6 +9,64 @@ unverified, it says so.
 
 ---
 
+## [2.2.4-beta] — 2026-11-18
+
+### Fixed — WASAPI hybrid went silent at 264 frames with a NAM capture loaded
+
+On WASAPI hybrid with Bluetooth earbuds at 44.1 kHz, Start at 264 frames gave silence and "a pedal
+failed with ArrayIndexOutOfBoundsException", three times in a row; 441 and 528 played. The
+earbuds refused the short output period hybrid asks for, so the output fell back to Windows'
+ordinary 10 ms period and wrote 441 frames at a time into a chain prepared for 264. Most pedals do
+not mind a longer block. The NAM pedal's rate converter, which runs when the capture's rate is not
+the stream's, does: it overflowed on the first period.
+
+The engine now never hands any pedal more than it was prepared for. A longer call from any
+backend is processed in pieces of the prepared size, so the sound is the same and the latency does
+not change. Three paths could produce one:
+
+- **WASAPI shared and hybrid**, where the block is whatever space the output has free.
+- **WASAPI exclusive**, when the output does not offer the BUFFER size and opens at the nearest one
+  above it. An HDMI output asked for 144 ran at 192. Exclusive now prepares the chain for the size
+  its output actually opens at, so it needs no pieces.
+- **ASIO**, after the buffer size was changed in the driver's own panel while running (below).
+
+The NAM pedal also protects itself from a longer block, and no longer allocates memory on the
+audio thread when it gets one.
+
+### Fixed — WASAPI hybrid ticked for the first part of a second, or for as long as it ran
+
+On hybrid, the output would play short clicks: one or two missing samples at a time, every third
+output period. Measured with the same earbuds at 264 frames, 2.2.3 dropped out 26 times in 30 s;
+2.2.4 dropped out 0 times in two 30 s runs, and none in 60 s with the allocation flood running. On
+an output that takes hybrid's short period (an ESS SABRE DAC), 8 and 13 dropouts in 30 s became 3.
+
+Two things caused it. Before the output started reading the input, it read whatever had arrived at
+each wake, so it began with almost nothing to spare, about 2 ms where it planned on 8. And when a
+wake found too little, it read the input down to empty, which put the next wake of the same timing
+pattern short again. Most often this ended within half a second, as the two devices' clocks drifted
+apart; with clocks that agree closely, it did not end. Now hybrid waits until it has what it plans
+to start from before it plays anything, and when a wake does come up short it leaves a packet in
+reserve, so a late input costs one gap, never a run of them. WASAPI exclusive and shared are
+unchanged.
+
+### Fixed — changing the ASIO buffer in the driver's panel while running
+
+When the driver asked for a reset, the program prepared the pedals for the new size but kept
+running the driver's old buffers, so the BUFFER box showed a size that was not the one playing.
+Lowering it handed the pedals blocks larger than they were prepared for. The program now does what
+the ASIO standard asks of a host: it stops the driver, rebuilds the buffers at the new size and
+rate, prepares the pedals for them, and starts again. The sound drops for a moment while it does.
+Not yet tried on hardware.
+
+### Fixed — a driver changing its format could prepare a pedal while it was playing
+
+When an ASIO driver or a JACK server changes size or rate while running, the pedals are prepared
+again on another thread, and nothing stopped that from happening halfway through a block the
+audio thread was processing: a delay line or a capture's converter could be swapped out under it.
+The audio thread now outputs silence until the preparation is finished, and never waits for it.
+
+---
+
 ## [2.2.3-beta] — 2026-11-18
 
 ### Fixed — on Linux, a converted rate into the sound server closed the program within a second

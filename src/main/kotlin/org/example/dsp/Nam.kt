@@ -138,7 +138,11 @@ class Nam : AudioProcessor {
     /** Multiply-adds per sample of the loaded model, or zero when there is none. */
     val operationsPerSample: Int get() = network?.operationsPerSample ?: 0
 
-    private var scratch = FloatArray(0)
+    /** The dry copy, at least [maxBlock] long so [processBlock] never has to grow it. */
+    private var scratch = FloatArray(DEFAULT_MAX_BLOCK)
+
+    /** Where a block longer than [maxBlock] is processed a piece at a time. See [process]. */
+    private var piece = FloatArray(DEFAULT_MAX_BLOCK)
 
     fun load(loaded: NamFile.Loaded) {
         val models = loaded.submodels.toTypedArray()
@@ -295,13 +299,41 @@ class Nam : AudioProcessor {
 
     override fun prepare(sampleRate: Float, maxBlockFrames: Int) {
         // The dry path needs a copy of the input, because the network overwrites in place.
-        if (scratch.size < maxBlockFrames) scratch = FloatArray(maxBlockFrames)
+        val most = maxBlockFrames.coerceAtLeast(1)
+        if (scratch.size < most) scratch = FloatArray(most)
+        if (piece.size < most) piece = FloatArray(most)
         deviceRate = sampleRate
-        maxBlock = maxBlockFrames
+        maxBlock = most
         rebuildAdapter()
     }
 
+    /**
+     * Never hands the converter or the dry copy more than [maxBlock] frames (2.2.4).
+     *
+     * The rate converter is sized from the block `prepare` was given, and a longer one overflowed
+     * it — an `ArrayIndexOutOfBoundsException` that silenced the program on a shared WASAPI output
+     * whose period was longer than the block asked for. The engine no longer passes such a block,
+     * and this holds even if a caller does: pieces of [maxBlock], through [piece]. The dry copy used
+     * to grow itself here instead, which was an allocation on the audio thread.
+     */
     override fun process(buffer: FloatArray, count: Int) {
+        val most = maxBlock
+        if (count <= most) {
+            processBlock(buffer, count)
+            return
+        }
+        val p = piece
+        var offset = 0
+        while (offset < count) {
+            val n = minOf(most, count - offset)
+            System.arraycopy(buffer, offset, p, 0, n)
+            processBlock(p, n)
+            System.arraycopy(p, 0, buffer, offset, n)
+            offset += n
+        }
+    }
+
+    private fun processBlock(buffer: FloatArray, count: Int) {
         select()
         val model = network ?: return // nothing loaded: pass through
 
@@ -313,10 +345,7 @@ class Nam : AudioProcessor {
         val wet = mixed * normalization * trim
         val dry = (1f - mixed) * trim
 
-        if (dry > 0f) {
-            if (scratch.size < count) scratch = FloatArray(count)
-            System.arraycopy(buffer, 0, scratch, 0, count)
-        }
+        if (dry > 0f) System.arraycopy(buffer, 0, scratch, 0, count)
 
         // At the model's own rate when the converter is in, at the device's when it is not. The
         // null case is the whole fast path: rates agreeing costs nothing, not even a branch per

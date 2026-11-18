@@ -268,18 +268,39 @@ internal class AsioStream(
     private val worker: ComWorker,
     private val callback: AudioCallback,
     private val events: StreamEvents,
-    private val frames: Int,
-    private val rate: Int,
+    initialFrames: Int,
+    initialRate: Int,
     private val inputChannel: Int,
     private val outputChannels: List<Int>,
 ) : AudioStream {
 
-    private val inputBlock = FloatArray(frames)
-    private val outputBlock = FloatArray(frames)
+    /**
+     * The block size and rate the driver's buffers are, or are next to be, created at. Both change
+     * only in [rebuild], with the driver stopped.
+     */
+    @Volatile
+    private var frames = initialFrames
 
-    /** [doubleBufferIndex] -> the driver's buffer for that side. */
-    private lateinit var inViews: Array<SampleView>
-    private lateinit var outViews: Array<Array<SampleView>>   // [channel][doubleBufferIndex]
+    @Volatile
+    private var rate = initialRate
+
+    /**
+     * Everything the callback reads that a [rebuild] replaces, published as one reference so a
+     * callback sees either the old set or the new one, never half of each.
+     */
+    private class Buffers(
+        val frames: Int,
+        val inputBlock: FloatArray,
+        val outputBlock: FloatArray,
+        /** [doubleBufferIndex] -> the driver's buffer for that side. */
+        val inViews: Array<SampleView>,
+        /** [channel][doubleBufferIndex]. */
+        val outViews: Array<Array<SampleView>>,
+        val periodNanos: Long,
+    )
+
+    @Volatile
+    private var buffers: Buffers? = null
 
     private var bufferInfos: Memory? = null
     private var callbackStruct: Memory? = null
@@ -335,9 +356,11 @@ internal class AsioStream(
     @Volatile
     private var running = false
 
+    /** Written on the driver's thread, released on the worker by [rebuild] and [close]. */
+    @Volatile
     private var mmcss: com.sun.jna.platform.win32.WinNT.HANDLE? = null
+    @Volatile
     private var priorityJoined = false
-    private val periodNanos = frames * 1_000_000_000L / rate
 
     override lateinit var format: StreamFormat
         private set
@@ -390,14 +413,22 @@ internal class AsioStream(
         callbackStruct = cbs
 
         val inType = driver.channelInfo(inputChannel, true).sampleType
-        inViews = Array(2) { half ->
+        val inViews = Array(2) { half ->
             SampleView(infos.getPointer(8L + half * 8L), frames, inType)
         }
-        outViews = Array(outputChannels.size) { i ->
+        val outViews = Array(outputChannels.size) { i ->
             val base = 24L * (1 + i)
             val type = driver.channelInfo(outputChannels[i], false).sampleType
             Array(2) { half -> SampleView(infos.getPointer(base + 8L + half * 8L), frames, type) }
         }
+        buffers = Buffers(
+            frames = frames,
+            inputBlock = FloatArray(frames),
+            outputBlock = FloatArray(frames),
+            inViews = inViews,
+            outViews = outViews,
+            periodNanos = frames * 1_000_000_000L / rate,
+        )
 
         signalOutputReady = if (driver.outputReady() == 0) driver.outputReadyInvoker() else null
         val (latIn, latOut) = runCatching { driver.latencies() }.getOrDefault(frames to frames)
@@ -467,18 +498,63 @@ internal class AsioStream(
             }
             if (resetRequested) {
                 resetRequested = false
-                val fresh = runCatching {
-                    worker.submit {
-                        val (i, o) = driver.latencies()
-                        format.copy(
-                            bufferFrames = driver.bufferSize()[2],
-                            inputLatencyFrames = i,
-                            outputLatencyFrames = o,
-                        )
-                    }
-                }.getOrNull()
-                events.onFormatChanged(fresh ?: format)
+                // The driver stopped and rebuilt at its new size and rate; the chain is prepared for
+                // them while nothing is calling it; then the driver starts again.
+                val rebuilt = runCatching { worker.submit { rebuild() } }
+                val fault = rebuilt.exceptionOrNull()
+                if (fault != null) {
+                    running = false
+                    events.onDeviceLost(
+                        "$deviceName asked to be reset and would not restart: " +
+                            (fault.message ?: fault.javaClass.simpleName)
+                    )
+                    return
+                }
+                events.onFormatChanged(format)
+                val restarted = runCatching { worker.submit { driver.start() } }.getOrDefault(-1)
+                if (restarted != 0) {
+                    running = false
+                    events.onDeviceLost("$deviceName would not start again after a reset: ${runCatching { worker.submit { driver.errorMessage() } }.getOrDefault("no detail")}")
+                    return
+                }
             }
+        }
+    }
+
+    /**
+     * Answers a reset request the way the ASIO spec asks a host to (2.2.4): stop, dispose the
+     * buffers, create them again at the driver's current preferred size and rate. On the COM worker,
+     * with the driver stopped, so no callback runs while [buffers] is replaced.
+     *
+     * Until 2.2.4 a reset only re-prepared the chain at the new preferred size while the driver kept
+     * calling back with the buffers made at open. Lowering the size in the driver's panel then handed
+     * the chain blocks larger than it was prepared for, and the BUFFER box showed a size that was
+     * not the one running. The driver is started again by the caller, after the chain is prepared.
+     */
+    private fun rebuild() {
+        runCatching { driver.stop() }
+        runCatching { driver.disposeBuffers() }
+        // The next callback may arrive on a new driver thread; that one joins Pro Audio itself.
+        Rt.leaveProAudio(mmcss); mmcss = null
+        priorityJoined = false
+        val oldInfos = bufferInfos
+        val oldCallbacks = callbackStruct
+        bufferInfos = null
+        callbackStruct = null
+        buffers = null
+        val r = driver.sampleRate().toInt()
+        if (r > 0) rate = r
+        // The panel sets the preferred size; a driver reporting nonsense keeps the size it had.
+        frames = runCatching { driver.bufferSize()[2] }.getOrDefault(0).takeIf { it > 0 } ?: frames
+        // The counters are per stream; a new rate or size is a new stream as far as they go.
+        settle = 0
+        firstCallbackNanos = 0
+        framesProcessed = 0
+        try {
+            createBuffers()
+        } finally {
+            oldInfos?.close()
+            oldCallbacks?.close()
         }
     }
 
@@ -495,18 +571,20 @@ internal class AsioStream(
             if (gap > worstGapMicros) worstGapMicros = gap
         }
         lastCallbackNanos = t0
-        val n = frames
+        // Read once: a rebuild replaces the whole set, never part of it.
+        val b = buffers ?: return
+        val n = b.frames
         try {
-            inViews[index].read(inputBlock, n)
-            callback.render(inputBlock, outputBlock, n)
-            val outs = outViews
-            for (c in outs.indices) outs[c][index].write(outputBlock, n)
+            b.inViews[index].read(b.inputBlock, n)
+            callback.render(b.inputBlock, b.outputBlock, n)
+            val outs = b.outViews
+            for (c in outs.indices) outs[c][index].write(b.outputBlock, n)
         } catch (_: Throwable) {
             // An exception escaping into JNI is not well defined. Fill silence, count it, carry on;
             // the monitor thread is what decides whether to tear the stream down.
-            val outs = outViews
-            java.util.Arrays.fill(outputBlock, 0, n, 0f)
-            for (c in outs.indices) outs[c][index].write(outputBlock, n)
+            val outs = b.outViews
+            java.util.Arrays.fill(b.outputBlock, 0, n, 0f)
+            for (c in outs.indices) outs[c][index].write(b.outputBlock, n)
             xruns++
         }
         signalOutputReady?.invoke()
@@ -517,7 +595,7 @@ internal class AsioStream(
         else framesProcessed += n
 
         val spent = System.nanoTime() - t0
-        if (spent > periodNanos) deadlineMisses++
+        if (spent > b.periodNanos) deadlineMisses++
         val micros = (spent / 1000L).toInt()
         if (micros > worstCallbackMicros) worstCallbackMicros = micros
     }

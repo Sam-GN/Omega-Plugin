@@ -68,6 +68,36 @@ class NamTest {
         return buffer[0]
     }
 
+    /**
+     * 2.2.4's crash, at the module: a 48 kHz capture on a 44.1 kHz stream runs through a converter
+     * sized from the prepared block, and a shared WASAPI output handed it a 441-frame period against
+     * 264 prepared. The converter's inner buffer is 289 frames; 441 needs 480, and it threw.
+     */
+    @Test
+    fun `a block longer than prepared runs through the rate converter in pieces`() {
+        fun converting(): Nam = Nam().apply {
+            prepare(44_100f, 264)
+            load(NamFile.parse(model("3"), "amp.nam"))
+        }
+        val signal = FloatArray(441) { kotlin.math.sin(it * 0.07).toFloat() * 0.5f }
+
+        val whole = converting()
+        assertTrue(whole.rateLatencyFrames > 0, "the converter must be in, or this tests nothing")
+        val once = signal.copyOf()
+        whole.process(once, once.size)
+
+        // The same signal handed over as a backend that respected the prepared size would have.
+        val pieces = converting()
+        val twice = signal.copyOf()
+        val first = twice.copyOfRange(0, 264)
+        val rest = twice.copyOfRange(264, 441)
+        pieces.process(first, first.size)
+        pieces.process(rest, rest.size)
+        val expected = first + rest
+
+        for (i in once.indices) assertEquals(expected[i], once[i], 0f, "sample $i")
+    }
+
     @Test
     fun `passes audio through untouched when nothing is loaded`() {
         val module = Nam()

@@ -93,7 +93,8 @@ class LowPointRegulatorTest {
                 if (settled && reg.primed) {
                     levelSum += level; levelMax = maxOf(levelMax, level); wakes++
                 }
-                val take = minOf(want, level)
+                // As the render loop reads: what the regulator says, the rest of the wake silence.
+                val take = minOf(reg.read, level)
                 level -= take
                 if (reg.hold) level += 1
                 nextRender += renderPeriod
@@ -144,6 +145,82 @@ class LowPointRegulatorTest {
         val r = simulate(seconds = 30.0, stallAt = 10.0, stallMicros = 150_000.0)
         val marginMs = r.finalMargin * 1000.0 / rate
         assertTrue(marginMs <= 2.0 + 1.0, "one stall raised the margin to $marginMs ms")
+    }
+
+    /**
+     * The hybrid when its output refuses the short period (2.2.4): Windows' ordinary shared engine,
+     * 441 frames every 10 ms at 44.1 kHz, against the same input's 264 every 5.99 ms. Measured on
+     * Bluetooth earbuds: twelve dropouts of one to three frames, every third wake — the packet
+     * pattern repeats 2, 2, 1 — for a third of a second. Each read the ring down to empty, which
+     * threw away the frames held back since the last, so the ring came back to the same place every
+     * cycle; only drift between the two clocks let it out. Here the clocks agree, so nothing would.
+     */
+    @Test
+    fun `on the ordinary shared period the measured input never drops out`() {
+        // Every phase of the input's pattern against the output's wakes, matched clocks and 50 ppm
+        // either way. The 2.2.3 regulator and read gave 3 to 75 dropouts in 30 s here, up to 42 of
+        // them after the first second. Started at a wake plus a packet plus the margin, the ring's
+        // low point sits a packet and the margin above a wake, and the input's worst lateness, 4 ms,
+        // is 176 frames of that 352.
+        for (offset in doubleArrayOf(0.0, 1_000.0, 2_000.0, 3_000.0, 4_000.0, 5_000.0)) {
+            for (ppm in doubleArrayOf(0.0, 50.0, -50.0)) {
+                val r = simulateFallback(seconds = 30.0, offsetMicros = offset, ppm = ppm) { k -> if (k % 5 == 0) 4_000.0 else 300.0 }
+                assertEquals(0, r.underruns.size, "offset $offset us, $ppm ppm: dropouts at wakes ${r.underruns}")
+            }
+        }
+    }
+
+    @Test
+    fun `on the ordinary shared period a late packet costs one gap, never a run of them`() {
+        // Harsher than measured: lateness drawn at random, so a late packet can be followed by one
+        // on time. Gaps may happen; what may not is the 2.2.3 run of one every third wake.
+        val random = Random(7)
+        val r = simulateFallback(seconds = 60.0, offsetMicros = 1_500.0, ppm = 0.0) {
+            if (random.nextInt(5) == 0) 4_000.0 + random.nextDouble() * 1_000.0 else random.nextDouble() * 1_000.0
+        }
+        for (i in 1 until r.underruns.size) {
+            assertTrue(r.underruns[i] - r.underruns[i - 1] >= 10, "dropouts at wakes ${r.underruns}: a run")
+        }
+        assertTrue(r.underruns.size <= 6, "${r.underruns.size} dropouts in a minute: ${r.underruns}")
+    }
+
+    private class FallbackResult(val underruns: List<Int>)
+
+    /**
+     * The fallback's shape: 441 frames every 10 ms at 44.1 kHz, against 264 every 5.99 ms, each
+     * packet late by [lateness] of its index. The ring is read as the render loop reads it — what
+     * [LowPointRegulator.read] says, the rest of the wake silence. Returns the wakes that underran.
+     */
+    private fun simulateFallback(seconds: Double, offsetMicros: Double, ppm: Double, lateness: (Int) -> Double): FallbackResult {
+        val rate = 44_100
+        val packet = 264
+        val take = 441
+        val reg = LowPointRegulator(rate, packet)
+        val capturePeriod = packet.toDouble() / rate * 1e6 * (1 + ppm * 1e-6)
+        val renderPeriod = take.toDouble() / rate * 1e6
+        var level = 0
+        var k = 1
+        var nextCapture = capturePeriod + offsetMicros + lateness(k)
+        var nextRender = renderPeriod
+        var wake = 0
+        val underruns = ArrayList<Int>()
+        val end = seconds * 1e6
+        while (nextRender < end) {
+            if (nextCapture <= nextRender) {
+                level += packet
+                k++
+                nextCapture = maxOf(k * capturePeriod + offsetMicros + lateness(k), nextCapture)
+            } else {
+                reg.decide(level, take)
+                level -= reg.drop
+                if (reg.underrun) underruns += wake
+                level -= minOf(reg.read, level)
+                if (reg.hold) level += 1
+                nextRender += renderPeriod
+                wake++
+            }
+        }
+        return FallbackResult(underruns)
     }
 
     @Test

@@ -228,3 +228,30 @@ The same test, with PipeWire's `Default` as the *converted input*, counts about 
 every two seconds — never an output underrun. The program never builds that pairing (`Default`
 offers every rate, so it is never converted); it is recorded so the figure is not mistaken for a
 fault of the fix if it is seen again.
+
+---
+
+## 12. WASAPI hybrid silenced the program when its output fell back to the shared period
+
+**Affects:** WASAPI hybrid in 2.2.2 and 2.2.3. **Status:** **fixed in 2.2.4.**
+
+An output that refuses the short `IAudioClient3` period it offered — Bluetooth earbuds, an NVIDIA
+HDMI output — gets Windows' ordinary shared period, and the render loop wrote a period of 441
+frames into a chain prepared for 264. With a NAM capture whose rate differs from the stream's, the
+pedal's rate converter overflowed and the program went silent with
+`ArrayIndexOutOfBoundsException`. Since 2.2.4 the engine processes a longer call in pieces of the
+prepared size, on every backend.
+
+The same versions also clicked: one to three frames short every third output wake. Before it was
+primed, the render loop read what the ring held at each wake, so it primed at the first wake that
+found a wake's worth and started 2 ms over instead of a packet and the margin. Each underrun then
+read the ring to empty, which repeated the shortfall on the next low wake of the 2-2-1 packet
+pattern and threw away the frames held back since. Only drift between the clocks ended it.
+`LowPointRegulator.read` now holds the ring until it reaches its start level and keeps a packet and
+the margin back on an underrun. Measured, `--selftest --stress`, 30 s each: Synido into Buds3 at
+264 frames, 26 dropouts on 2.2.3 and 0, 0 on 2.2.4; the virtual cable into an ESS SABRE on the
+short period with the full chain, 8 and 13 on 2.2.3 and 3 on 2.2.4.
+
+On an output that falls back, the round trip is about 32 ms against 18 ms on exclusive with the
+same pair, so there hybrid buys nothing. That is the fallback working as designed, not a defect,
+and the picker does not yet say so.
