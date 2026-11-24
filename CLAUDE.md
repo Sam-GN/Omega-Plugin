@@ -128,7 +128,9 @@ check — see "Check for updates" below. The three:
 
 - **`audio/`** — the backend seam and the callback body.
   - `AudioBackend.kt` defines the seam: a **duplex stream driven by one clock**, callback-driven,
-    mono float in and out. `Backends` is the registry and the fallback ladder.
+    mono float in and out. `Backends` is the registry and the fallback ladder, ordered by
+    `BackendId.rank`; on Windows since 2.3.4: ASIO, ASIO hybrid, WASAPI hybrid, WASAPI exclusive,
+    WASAPI shared, Java Sound — so a first run without an ASIO driver starts on WASAPI hybrid.
   - `audio/asio/` — the primary path on Windows. `IASIO` is reached by walking its COM vtable by
     hand through JNA; there is no Steinberg SDK and there must never be one (licence).
   - `audio/wasapi/` — exclusive, event-driven, two endpoints and two clocks. Three backends from

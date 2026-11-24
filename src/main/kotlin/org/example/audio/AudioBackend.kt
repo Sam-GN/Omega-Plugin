@@ -37,15 +37,24 @@ package org.example.audio
  * which exists because of a backend that is not Windows.
  */
 
-/** Which implementation, not which device. [rank] orders automatic selection: lowest wins. */
+/**
+ * Which implementation, not which device. [rank] orders the driver picker and automatic selection:
+ * lowest wins. Entries are appended, never inserted, because the ordinal must not move; the order
+ * the user sees is the rank's alone.
+ *
+ * Windows, since 2.3.4: ASIO, ASIO hybrid, WASAPI hybrid, WASAPI exclusive, WASAPI shared, Java
+ * Sound — the hybrids ahead of exclusive by the maintainer's choice, after both proved cleaner on
+ * hardware. A machine without an ASIO driver therefore starts on WASAPI hybrid on a first run;
+ * a saved choice is kept by name and never moved. Linux's ranks are compared only with each other.
+ */
 enum class BackendId(val displayName: String, val rank: Int) {
     ASIO("ASIO", 0),
-    WASAPI_EXCLUSIVE("WASAPI exclusive", 1),
+    WASAPI_EXCLUSIVE("WASAPI exclusive", 3),
 
     /**
      * Linux's ASIO: one clock, a server-owned realtime thread. Reaches PipeWire through its JACK
-     * shim as well as a real jackd. Shares a rank with WASAPI exclusive because the two never meet —
-     * the registry only loads a backend on the OS it is for.
+     * shim as well as a real jackd. Shares a rank with ASIO hybrid because the two never meet — the
+     * registry only loads a backend on the OS it is for.
      */
     JACK("JACK / PipeWire", 1),
 
@@ -56,8 +65,8 @@ enum class BackendId(val displayName: String, val rank: Int) {
      * WASAPI with the input exclusive and the output shared at `IAudioClient3`'s shortest period
      * (2.2.0). For an output whose exclusive path is slower than its shared one — a Cirrus Logic
      * SoundWire laptop output held 102 ms behind its own clock in exclusive mode and 2.4 ms shared —
-     * and for playing along with something else on the computer. Ranked under exclusive so no
-     * machine is moved onto it by default; shares ALSA's rank because the two never meet.
+     * and for playing along with something else on the computer. Ahead of exclusive since 2.3.4;
+     * shares ALSA's rank because the two never meet.
      */
     WASAPI_HYBRID("WASAPI hybrid", 2),
 
@@ -68,7 +77,7 @@ enum class BackendId(val displayName: String, val rank: Int) {
      * the only rung short of Java Sound that lets other applications keep using the device while
      * Omega is running.
      */
-    WASAPI_SHARED("WASAPI shared", 3),
+    WASAPI_SHARED("WASAPI shared", 4),
     JAVA_SOUND("Java Sound", 9),
 
     /**
@@ -76,10 +85,9 @@ enum class BackendId(val displayName: String, val rank: Int) {
      * (2.3.0). For an interface whose ASIO driver is clean where Windows' path to it is not — a
      * Pocket Master under WASAPI stopped capturing for 20 to 50 ms every fifteen seconds and under
      * its own ASIO driver did not — played through the computer's own output, with everything else
-     * on the computer still audible. Appended, so no existing entry moves; ranked with WASAPI hybrid,
-     * under ASIO and exclusive, so no machine is moved onto it by default.
+     * on the computer still audible. Appended, so no ordinal moves; second only to ASIO since 2.3.4.
      */
-    ASIO_HYBRID("ASIO hybrid", 2),
+    ASIO_HYBRID("ASIO hybrid", 1),
 }
 
 sealed class Availability {

@@ -9,6 +9,19 @@ unverified, it says so.
 
 ---
 
+## [2.3.4-beta] — 2026-11-24
+
+### Changed — the driver list puts the hybrids ahead of WASAPI exclusive
+
+The DRIVER picker on Windows now reads, best first: ASIO, ASIO hybrid, WASAPI hybrid, WASAPI
+exclusive, WASAPI shared, Java Sound. Before, both hybrids came after exclusive.
+
+The same order decides which driver a first run picks — the best one available that can see a
+device — so a computer without an ASIO driver now starts on WASAPI hybrid rather than WASAPI
+exclusive. A driver already chosen is remembered by name and not moved. Linux is unchanged.
+
+---
+
 ## [2.3.2-beta] — 2026-11-24
 
 ### Changed — a NAM capture costs half of what it did
