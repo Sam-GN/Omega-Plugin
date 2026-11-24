@@ -171,6 +171,7 @@ status line.
 | **ASIO** | Windows | The lowest delay by a wide margin. Needs the driver from your interface's maker. The interface is both input and output, so choosing it under INPUT fills in OUTPUT too. |
 | **WASAPI exclusive** | Windows | No extra driver needed. The program takes sole control of the device while running, so other programs cannot play sound through it. The next best after ASIO. |
 | **WASAPI hybrid** | Windows | Your interface's input is taken exclusively, as above, and the output goes through Windows at the shortest delay the device allows, so other programs can play through it too: play along to a song from your browser. On some laptops this is faster than exclusive, whose built-in outputs can hold back 100 ms that no setting reports. If exclusive feels slow through your computer's own headphone jack, try this. The Windows volume control affects the output here. |
+| **ASIO hybrid** | Windows | Your interface's input through its own ASIO driver, and the output through Windows like WASAPI hybrid, so the computer's speakers or headphone jack play the guitar and everything else on the computer stays audible. Choose the interface under INPUT and the computer's output under OUTPUT. While it runs, the interface itself is in use by the program. |
 | **JACK / PipeWire** | Linux | The Linux equivalent of ASIO. Needs the `pipewire-jack` package, or a running jackd. |
 | **ALSA** | Linux | Always available. The entry called `Default` goes through the sound server and lets other programs keep playing. The entries marked `(direct)` go straight to the card and are faster, but only when nothing else is using it. |
 | **WASAPI shared** | Windows | Lets other programs keep using the device, at the cost of roughly 66 ms of delay. For checking things, not for playing. |
@@ -185,9 +186,13 @@ Which device the guitar comes in from, and which device the sound goes out to. N
 interface. Under ASIO they are the same box and the second picker follows the first.
 
 You can mix devices under WASAPI and ALSA, for instance a USB microphone in and the computer's
-speakers out. Two different physical devices each run on their own clock, and at the smallest
-buffer sizes they drift apart and drop out. If that happens, use a larger BUFFER, or the same device
-both ways.
+speakers out. Two different physical devices each run on their own clock, and they drift apart.
+Every WASAPI mode, and ASIO hybrid, follows that drift by resampling the input by a few parts per
+million, which you cannot hear, and keeps enough of it in hand to ride out a USB input's uneven
+timing. It remembers the worst lateness it has seen and gives back delay only after a quiet minute,
+never below that, so a late packet that dropped out once does not drop out again. On Linux, ALSA
+with two cards can still drop out at the smallest buffer sizes; if it does, use a larger BUFFER or
+the same card both ways.
 
 ### RATE
 
@@ -915,6 +920,14 @@ BUFFER one step and try again. Check the health readout: DSP near 100 % or dropo
 it. A NAM capture wants 128 frames; two of them want 256. On Linux, the status line may say the audio
 thread is not realtime; see the Linux note below.
 
+**Dropouts every few seconds on a laptop, on every driver.** A USB interface that loses its stream
+for tens of milliseconds at a time is often being power-managed. Plug the laptop in, choose
+the High performance power plan, and turn off USB selective suspend (Control Panel > Power Options >
+Change plan settings > Change advanced power settings > USB settings). The health line shows it as
+long gaps between the input's packets; on WASAPI and ASIO hybrid such a dropout is counted as a
+hole and does not add delay. If it persists, a tool such as LatencyMon names the driver holding the
+computer up.
+
 **The delay is long, like playing through a bad video call.** You are almost certainly on Java
 Sound. Look at DRIVER. If ASIO is not in the list on Windows, install the ASIO driver from your
 interface's maker and press Rescan or restart. If it is in the list but you are not on it, choose
@@ -939,7 +952,8 @@ plugged in after the program started; restart the program. Under ASIO, make sure
 has the interface open.
 
 **Two different devices in and out drop out at small buffers.** Each has its own clock and they drift
-apart. Use a bigger buffer, the same device both ways, or ASIO.
+apart. On Windows every WASAPI mode and ASIO hybrid follow the drift themselves; on Linux's ALSA, use
+a bigger buffer or the same card both ways.
 
 **WASAPI exclusive refuses a device, or stops with a message about its event timing.** Some drivers
 cannot run in exclusive mode at all; HDMI outputs on some graphics cards are known for it. The program

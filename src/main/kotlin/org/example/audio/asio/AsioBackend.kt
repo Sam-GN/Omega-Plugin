@@ -341,6 +341,15 @@ internal class AsioStream(
     private var lastCallbackNanos: Long = 0
     private var settle = 0
 
+    /**
+     * The longest pause between two callbacks (2.3.0). In one-clock ASIO a driver that stops calling
+     * back stops both directions together, so no counter here moves — the interface simply plays
+     * nothing for that long. This is the one figure that shows it.
+     */
+    override val healthNote: String?
+        get() = "longest gap between callbacks ${"%.1f".format(worstGapMicros / 1000f)} ms, against a " +
+            "${"%.2f".format(frames * 1000f / rate)} ms period"
+
     override val realtimeRatio: Float
         get() {
             val t0 = firstCallbackNanos

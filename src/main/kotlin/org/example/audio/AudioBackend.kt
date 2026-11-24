@@ -70,6 +70,16 @@ enum class BackendId(val displayName: String, val rank: Int) {
      */
     WASAPI_SHARED("WASAPI shared", 3),
     JAVA_SOUND("Java Sound", 9),
+
+    /**
+     * An ASIO input with a Windows output, shared at its shortest period as WASAPI hybrid's is
+     * (2.3.0). For an interface whose ASIO driver is clean where Windows' path to it is not — a
+     * Pocket Master under WASAPI stopped capturing for 20 to 50 ms every fifteen seconds and under
+     * its own ASIO driver did not — played through the computer's own output, with everything else
+     * on the computer still audible. Appended, so no existing entry moves; ranked with WASAPI hybrid,
+     * under ASIO and exclusive, so no machine is moved onto it by default.
+     */
+    ASIO_HYBRID("ASIO hybrid", 2),
 }
 
 sealed class Availability {
@@ -251,6 +261,13 @@ interface AudioStream : AutoCloseable {
      * its audio thread (ALSA) has a real answer; on Windows MMCSS is joined silently as it always was.
      */
     val schedulingNote: String? get() = null
+
+    /**
+     * What this backend can add to a stream-health line — which side [xruns] came from, how a clock
+     * bridge is doing — or null where there is nothing more to say. Read off the audio thread; may
+     * allocate.
+     */
+    val healthNote: String? get() = null
 
     fun start()
     fun stop()

@@ -9,6 +9,137 @@ unverified, it says so.
 
 ---
 
+## [2.3.0-beta] — 2026-11-23
+
+### Fixed — WASAPI hybrid crackled and dropped out between two devices
+
+With a Pocket Master input, converted from 44.1 kHz, into a laptop's Cirrus Logic output at
+48 kHz, hybrid sounded full of grit and dropped out 6 to 10 times a minute at every buffer size.
+The log of one 88-second run counted why: **12 565 samples deleted or repeated, and 20 dropouts.**
+
+Two devices never run at exactly the same rate, so something has to make up the difference. The
+input's rate conversion ran at a fixed ratio and left the whole difference to the buffer between
+the two devices, which made it up by deleting or repeating a single sample. Real drift needs a
+handful of those a second. But the input's packets arrive a few milliseconds late at random, the
+correction mistook that for drift, and spliced 143 times a second — each one a step in the
+waveform that the drive turned into grit. The same buffer was also kept as close to empty as it
+could be, so a late packet emptied it.
+
+Hybrid now joins the two clocks by resampling. The conversion and the drift are one resampler
+whose ratio moves by a few parts per million, which cannot be heard, and **no sample is ever
+deleted or repeated**. The ratio follows a slow measurement of the drift that the input's lateness
+does not disturb. How much audio is kept in hand is learned from how late the input actually
+runs: it starts with 3 ms of room for that, keeps the worst lateness it has seen this session, and
+gives back half a millisecond only after a quiet minute, never below that worst plus 1 ms. A real
+stall in the input is one short dropout with a fade at each side, not a run of clicks, and the
+late packets that land after it are cut with a 3 ms crossfade instead of being kept as delay.
+
+The first build of this, tried on the Pocket Master, still dropped out mid-song and once built up
+latency after a big dropout. Its log showed why. It gave back its room for lateness after every
+ten quiet seconds until none was left, and the next late packet dropped out; with a 6 ms late
+packet every 20 s, that is 13 dropouts in ten minutes in simulation, and at most one, the first,
+now. And after a stall it refilled as soon as the first late packet landed, so the rest of them
+became delay, drained at 2 ms a second; they are now cut within 30 ms.
+
+Measured in simulation, with the Pocket Master's packet shape and up to 2.6 ms of lateness: a
+1 kHz tone through it carries broadband noise **107 dB** below the tone, where the splicing
+measured 28 dB; no dropouts in ten minutes with the clocks 200 ppm apart either way; none in a
+minute on Windows' ordinary 10 ms period. The first build was heard on the hardware (above);
+this one has run only in simulation so far.
+
+The delay hybrid adds starts about where the old one ran in practice, about 9 ms, and comes down
+only as far as the input's timing has shown it can: an input that is sometimes 6 ms late keeps
+about that much more. The figure shown includes all of it, and moves when the bridge does. WASAPI
+exclusive and shared are unchanged.
+
+### Fixed — WASAPI exclusive and shared spliced samples and dropped out between two devices
+
+Exclusive and shared had the same splicing, measured on the Pocket Master for a minute each: into
+a laptop's output, exclusive spliced 12 samples and dropped out 45 times and shared spliced 6 and
+dropped out twice; into its own output, each spliced 2. Both now join their clocks with the same
+resampling bridge as hybrid, and nothing is spliced in any WASAPI mode:
+
+| Pocket Master into | Mode | Before | Now |
+| --- | --- | --- | --- |
+| a laptop's output | exclusive | 12 spliced, 45 dropouts | none spliced, 4 dropouts, 2 of them holes |
+| a laptop's output | shared | 6 spliced, 2 dropouts | none spliced, 1 gap the input reported |
+| its own output | exclusive | 2 spliced, 18.0 ms round trip | none spliced, 22.7 ms |
+| its own output | shared | 2 spliced, 66.0 ms | none spliced, 64.7 ms |
+
+The one cost is on exclusive with one device both ways, which ran with no margin at all and got
+away with it because both sides tick almost together: 4.7 ms more round trip at the start — the
+resampler's 0.7 ms, a 1 ms safety margin and 3 ms of room for lateness, the last given back half a
+millisecond a quiet minute. The bridge is sized by what the output takes at each wake — its
+period, not its whole buffer, which on a shared output is about twice as long.
+
+### Changed — Linux: ALSA pairs on two clocks join them by resampling too
+
+On Linux, an ALSA input converted from its own rate spliced a frame for each drift correction, the
+same defect as Windows had, and an input and output on two different cards at the same rate had no
+drift correction at all: they ran until one side emptied or overflowed and the stream restarted.
+Both now go through the same resampling bridge, as does a card paired with `default`. The input is
+stamped with when it was captured, from ALSA's own timestamps, so the bridge follows the drift
+exactly; a driver that gives none still never drops out in simulation, but its drift reading
+wobbles. One card both ways, or `default` both ways, keeps the lockstep loop exactly as it was.
+
+**Not yet run on Linux.** Simulated at ALSA's own period choices, 100 ppm apart either way for
+twenty minutes, with no dropouts and the drift followed to within 15 ppm; a 1 kHz tone through it
+carries broadband noise more than 80 dB down. `known-issues.md` §5 lists what to check.
+
+### Added — ASIO hybrid: an interface's ASIO input, played through the computer's own output
+
+A new choice under DRIVER on Windows. The input comes from the interface's ASIO driver; the output
+goes through Windows exactly as WASAPI hybrid's does, so the laptop's speakers or headphone jack
+play the guitar and everything else on the computer stays audible. The two are joined by the same
+resampling bridge, which converts the input's rate (44.1 kHz on a Pocket Master) and follows the
+drift. Choose the interface under INPUT and the computer's output under OUTPUT; BUFFER is the ASIO
+buffer. While it runs, the program has the interface to itself. ASIO, WASAPI hybrid and the other
+modes are unchanged.
+
+### Changed — a dropout the input caused by not capturing adds no delay
+
+The bridge now tells a hole — audio the input never captured — from audio that arrived late, and
+only late audio earns it more room. A WASAPI input says so through the capture timestamps every
+packet carries; any other input, ASIO included, is judged by what it delivers after it resumes:
+late audio catches up, missing audio stays short. On the Pocket Master, every hole charged as
+lateness had taken the bridge to 20.8 ms without preventing one dropout; on ASIO hybrid with holes
+judged it settled at 13.7 ms. Tested in simulation against reported holes, unreported holes, and a
+stall that is late but whole, which must still raise the target.
+
+### Found — on one laptop the USB interface paused on every driver
+
+Measured with the new timing figures: the Pocket Master's input paused for 15 to 72 ms at a time
+under WASAPI exclusive, WASAPI shared, ASIO hybrid and plain ASIO — where it had read as clean only
+because a pause stops both directions together and nothing counted it. The program's own thread
+picked every packet up within 0.2 ms. The laptop was on battery, on the Balanced plan, with USB
+selective suspend on. ASIO's health line now reports its longest gap between callbacks, and the
+manual has a troubleshooting entry for it. No software change removes a pause like that; the
+bridge now keeps it from adding delay.
+
+### Added — the stream-health log line says which side dropped out
+
+On WASAPI the line now splits its dropouts into **input gaps** (the input reported lost data) and,
+on hybrid, **bridge dropouts** (the input arrived too late), and adds the drift being followed in
+ppm, the level the bridge keeps, backlogs cut, the worst lateness seen, and **output ran dry**:
+wakes that found Windows had already played everything queued, a gap after the program that
+nothing else counts. It also says what the input's timing actually is: the longest gap between
+two packets, and how many landed over 2 ms and over 5 ms late. `--selftest` prints the same line.
+
+### Fixed — the tests that guard the audio thread against allocation measured nothing
+
+Allocation on the audio thread is what sets off the collector, which is a dropout. Seven tests
+hold the callback to none: the chain, split mode, the loop box, the tuner, oversized blocks and the
+rhythm section. Each read the JVM's allocation counter by reflection, which Java 21 refuses; the
+read came back -1, and each test took that to mean "nothing to measure" and passed. They now read
+the counter directly and fail if it cannot be read. All seven pass, so the callback is clean, and
+a planted 32 bytes a block is caught in every engine test.
+
+The tuner test's second half had never run either. Once it did, it read 344.6 Hz for a 351 Hz
+tone, which was the test feeding a sine that restarted every block; the tuner was right about the
+signal it got. The test now feeds a continuous one.
+
+---
+
 ## [2.2.4-beta] — 2026-11-18
 
 ### Fixed — WASAPI hybrid went silent at 264 frames with a NAM capture loaded

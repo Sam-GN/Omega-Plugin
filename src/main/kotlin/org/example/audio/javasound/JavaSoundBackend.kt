@@ -237,6 +237,12 @@ internal class JavaSoundStream(
     )
         private set
 
+    /** The queue and what the regulator did to it — each correction is a frame spliced in or out. */
+    override val healthNote: String?
+        get() = "cushion ${"%.1f".format(cushionFrames * 1000f / inFmt.sampleRate)} ms, lowest " +
+            "${if (minCushionFrames == Int.MAX_VALUE) "-" else "%.1f".format(minCushionFrames * 1000f / inFmt.sampleRate)} ms, " +
+            "frames spliced $driftCorrections, capture overruns $overruns"
+
     private var thread: Thread? = null
     private var monitor: Thread? = null
 

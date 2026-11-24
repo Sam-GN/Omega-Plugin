@@ -26,6 +26,7 @@ import com.sun.jna.platform.win32.Ole32
 import com.sun.jna.platform.win32.WinNT
 import com.sun.jna.ptr.IntByReference
 import com.sun.jna.ptr.PointerByReference
+import org.example.audio.ClockBridge
 import org.example.audio.Availability
 import org.example.audio.AudioBackend
 import org.example.audio.AudioBackendException
@@ -42,7 +43,6 @@ import org.example.audio.StreamRequest
 import org.example.audio.win.ComObject
 import org.example.audio.win.Rt
 import org.example.audio.win.hrName
-import org.example.dsp.Resampler
 import org.example.util.Log
 
 /**
@@ -82,9 +82,9 @@ internal fun hnsForFrames(frames: Int, rate: Int): Long = Math.ceilDiv(frames * 
  * It is a rung below ASIO for two structural reasons, both visible in the code:
  *
  * - **Two endpoints, two clocks.** Input and output are separate `IAudioClient`s that are not
- *   sample-locked even when they are the same physical box, so a ring and a slow drift correction
- *   sit between them, and one render period of the round trip is spent crossing it. That cost is
- *   declared honestly in [StreamFormat.adapterLatencyFrames] rather than hidden.
+ *   sample-locked even when they are the same physical box, so a [ClockBridge] sits between them,
+ *   resampling to follow the drift, and its level is part of the round trip. That cost is declared
+ *   honestly in [StreamFormat.adapterLatencyFrames] rather than hidden.
  * - **It takes the device from the rest of the system.** Nothing else can play through it while the
  *   stream is open, and a driver left un-released can stay stuck until a reboot — which is why
  *   [close] releases in a `finally` and the app exits deliberately.
@@ -111,8 +111,8 @@ open class WasapiBackend protected constructor(
     )
 
     /**
-     * Two endpoints, two clocks, a ring between them: the capture side can run at its own rate
-     * and be converted on the way into the ring. See [WasapiStream.captureLoop] and `SampleRates`.
+     * Two endpoints, two clocks, a [ClockBridge] between them: the capture side runs at its own rate
+     * and the bridge converts it on the way out. See [WasapiStream.captureLoop] and `SampleRates`.
      */
     override val convertsInput: Boolean get() = true
 
@@ -567,6 +567,41 @@ open class WasapiBackend protected constructor(
         }
     }
 
+    /**
+     * The output alone, shared at its shortest period as the hybrid's is, reading [bridge] — which
+     * some other input fills (2.3.0, ASIO hybrid). Only meaningful on a backend whose output is shared
+     * at a short period; the request's input is ignored.
+     */
+    internal fun openRenderOnly(
+        output: BackendDevice,
+        request: StreamRequest,
+        callback: AudioCallback,
+        events: StreamEvents,
+        bridge: ClockBridge,
+        bridgeRate: Int,
+        bridgePacketFrames: Int,
+    ): AudioStream {
+        if (!availability.isAvailable) throw AudioBackendException(availability.reason ?: "unavailable")
+        check(renderShared && lowLatencyRender) { "render-only needs the hybrid's shared output" }
+        val outSizes = capabilities(output, request.sampleRate).bufferSizes
+        if (outSizes.isEmpty()) {
+            throw AudioBackendException("${output.name} would not open in shared mode at ${SampleRates.format(request.sampleRate)}.")
+        }
+        streaming = true
+        return WasapiStream(
+            output, output, request, callback, events, bridgePacketFrames, outSizes.first(), bridgeRate,
+            captureShared = false, renderShared = true, lowLatencyRender = true,
+            onClosed = {
+                streaming = false
+                if (invalidateWhenIdle) {
+                    invalidateWhenIdle = false
+                    dropProbes("deferred rescan")
+                }
+            },
+            externalBridge = bridge,
+        )
+    }
+
     override fun shutdown() {
         streaming = false
     }
@@ -600,12 +635,12 @@ open class WasapiBackend protected constructor(
 }
 
 /**
- * One duplex stream: a capture thread filling a ring, a render thread draining it through the
- * effect chain.
+ * One duplex stream: a capture thread filling a [ClockBridge], a render thread reading it through
+ * the effect chain — or, for ASIO hybrid, the render thread alone with a bridge someone else fills.
  *
- * The ring is single-producer/single-consumer with plain volatile indices — no lock, because a lock
- * held by the capture thread while the render thread wants it is exactly the stall this design
- * exists to avoid.
+ * The bridge is single-producer/single-consumer with plain volatile indices — no lock, because a
+ * lock held by the capture thread while the render thread wants it is exactly the stall this
+ * design exists to avoid.
  */
 internal class WasapiStream(
     private val inputDevice: BackendDevice,
@@ -623,19 +658,70 @@ internal class WasapiStream(
     private val renderShared: Boolean,
     /** The output opens through `IAudioClient3` at [renderTargetFrames] as its engine period. */
     private val lowLatencyRender: Boolean,
+    /**
+     * ASIO hybrid (2.3.0): a bridge something else fills — an ASIO input — so this stream opens no
+     * capture endpoint at all and runs its render thread alone. Null for every WASAPI mode, which
+     * then behaves exactly as it did.
+     */
+    private val externalBridge: ClockBridge? = null,
     private val onClosed: () -> Unit,
 ) : AudioStream {
 
-    private val ring = FloatArray(1 shl 15)
-    private val ringMask = ring.size - 1
-
-    @Volatile private var ringWrite = 0
-    @Volatile private var ringRead = 0
+    /** Output only: the input is [externalBridge]'s writer's business. */
+    private val renderOnly = externalBridge != null
 
     @Volatile override var xruns: Int = 0; private set
     @Volatile override var deadlineMisses: Int = 0; private set
     @Volatile override var worstCallbackMicros: Int = 0; private set
-    @Volatile var driftCorrections: Int = 0; private set
+
+    /**
+     * The join between the two clocks, in every mode (2.3.0): the input goes in at its own rate and
+     * the output reads it resampled, following the drift, never splicing.
+     *
+     * Hybrid had it first. Exclusive and shared kept a ring that deleted or repeated single frames
+     * until they were measured on the Pocket Master: two frames spliced a minute into its own
+     * output, and into a laptop's, ten spliced and 37 dropouts a minute on exclusive, four and one
+     * on shared. The defect was there, so the fix went there too.
+     */
+    private val bridge: ClockBridge = externalBridge
+        ?: ClockBridge(captureRate, request.sampleRate, captureTargetFrames)
+
+    /** Frames the output takes at a wake: its period, which on a shared output is not its buffer. */
+    @Volatile private var renderWakeFrames = 0
+
+    /** The part of [xruns] the input caused: a discontinuity flag, or a packet it would not hand over. */
+    @Volatile private var inputGaps: Int = 0
+
+    /**
+     * Shared output wakes that found the output's buffer empty: the Windows audio engine ran dry
+     * before this wake, a gap after the app that no other counter sees. Not added to [xruns],
+     * because what the engine played meanwhile is its business; reported beside it.
+     */
+    @Volatile private var outputDry: Int = 0
+
+    /** Longest from a packet's capture, by the device's timestamp, to this program picking it up. */
+    @Volatile private var maxPickupNanos = 0L
+    @Volatile private var pickupsOver5Ms = 0
+    /** Longest between two packets' capture timestamps: the device's own regularity. */
+    @Volatile private var maxDeviceGapNanos = 0L
+    private var lastCapturedNanos = 0L
+    /** Frames the device's own position says it captured and never delivered, and how many times. */
+    @Volatile private var framesSkipped = 0L
+    @Volatile private var skipEvents = 0
+    private var lastDevicePosition = -1L
+    private var lastPacketFrames = 0
+
+    /** Which side [xruns] came from, and how the bridge is doing (2.3.0). */
+    override val healthNote: String?
+        get() {
+            val b = bridge
+            return "input gaps $inputGaps, bridge dropouts ${b.underruns}, output ran dry $outputDry, " +
+                "drift ${"%+.0f".format(b.correctionPpm)} ppm, bridge ${"%.1f".format(b.targetMs)} ms, " +
+                "backlogs cut ${b.backlogCuts}, worst lateness ${"%.1f".format(b.peakLatenessMs)} ms, " +
+                "holes ${b.holes} (${"%.0f".format(b.holeFrames * 1000.0 / captureRate)} ms), dropouts that were holes ${b.holesForgiven}; input: " +
+                "longest gap ${"%.1f".format(b.longestGapMs)} ms, late >2 ms ${b.lateOver2Ms}, >5 ms ${b.lateOver5Ms}; " +
+                "device spacing max ${"%.1f".format(maxDeviceGapNanos / 1e6)} ms, pickup max ${"%.1f".format(maxPickupNanos / 1e6)} ms, pickups >5 ms $pickupsOver5Ms, frames skipped $framesSkipped in $skipEvents"
+        }
 
     @Volatile private var running = false
     @Volatile private var opened = false
@@ -665,7 +751,7 @@ internal class WasapiStream(
     @Volatile private var captureLatency100ns = 0L
     @Volatile private var negotiatedRate = request.sampleRate
 
-    private val ready = java.util.concurrent.CountDownLatch(2)
+    private val ready = java.util.concurrent.CountDownLatch(if (renderOnly) 1 else 2)
 
     /**
      * What the stream opened with, as the driver reported it; before [start], what the engine
@@ -704,25 +790,41 @@ internal class WasapiStream(
      */
     override val format: StreamFormat
         get() {
-            val base = baseFormat
+            // The bridge moves its level as it learns the input, and says so here.
+            var base = baseFormat
+            val live = bridge.latencyFrames
+            if (opened && live > 0 && live != base.adapterLatencyFrames) {
+                base = base.copy(adapterLatencyFrames = live)
+                baseFormat = base
+            }
             val hidden = hiddenOutputFrames(base, measuredQueueFrames)
             if (hidden == 0) return base
-            adjustedFormat?.let { if (it.hiddenOutputLatencyFrames == hidden && it.sampleRate == base.sampleRate) return it }
+            adjustedFormat?.let {
+                if (it.hiddenOutputLatencyFrames == hidden && it.sampleRate == base.sampleRate &&
+                    it.adapterLatencyFrames == base.adapterLatencyFrames
+                ) return it
+            }
             val adjusted = withHiddenOutput(base, measuredQueueFrames)
             adjustedFormat = adjusted
-            Log.warn(
-                "wasapi",
-                "${outputDevice.name} holds ${"%.1f".format(hidden * 1000f / base.sampleRate)} ms of output " +
-                    "beyond the ${base.outputLatencyFrames} frames it reports, by its own clock; the round " +
-                    "trip is ${"%.1f".format(adjusted.reportedRoundTripMs)} ms, not " +
-                    "${"%.1f".format(base.reportedRoundTripMs)}.",
-            )
+            // Said once per figure, not each time the bridge's level moves the round trip.
+            if (hidden != reportedHidden) {
+                reportedHidden = hidden
+                Log.warn(
+                    "wasapi",
+                    "${outputDevice.name} holds ${"%.1f".format(hidden * 1000f / base.sampleRate)} ms of output " +
+                        "beyond the ${base.outputLatencyFrames} frames it reports, by its own clock; the round " +
+                        "trip is ${"%.1f".format(adjusted.reportedRoundTripMs)} ms, not " +
+                        "${"%.1f".format(base.reportedRoundTripMs)}.",
+                )
+            }
             return adjusted
         }
 
+    @Volatile private var reportedHidden = 0
+
     override fun start() {
         running = true
-        captureThread = Thread({ run(false) }, "omega-wasapi-capture").apply { isDaemon = true; start() }
+        if (!renderOnly) captureThread = Thread({ run(false) }, "omega-wasapi-capture").apply { isDaemon = true; start() }
         renderThread = Thread({ run(true) }, "omega-wasapi-render").apply { isDaemon = true; start() }
         if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
             stop()
@@ -739,12 +841,9 @@ internal class WasapiStream(
             bufferFrames = renderFrames,
             inputLatencyFrames = ((captureLatency100ns * rate) / 10_000_000L).toInt().coerceAtLeast(captureInEngineFrames),
             outputLatencyFrames = ((renderLatency100ns * rate) / 10_000_000L).toInt().coerceAtLeast(renderFrames),
-            // The hop across the ring between two unlocked clocks, plus the converter when the input
-            // runs at its own rate. Declared, not hidden.
-            // The hybrid's ring is steered to a millisecond above empty at its low point and swings
-            // by one input packet above that, so half a packet plus the margin is its average.
-            adapterLatencyFrames = (if (lowLatencyRender) captureInEngineFrames / 2 + rate / 1000 else renderFrames) +
-                if (captureRate != rate) SampleRates.conversionFrames(captureRate, rate) else 0,
+            // The bridge between the two unlocked clocks declares its own level, which includes its
+            // resampler's delay. Declared, not hidden.
+            adapterLatencyFrames = bridge.startingLatencyFrames(renderWakeFrames.takeIf { it > 0 } ?: renderFrames),
             inputRate = captureRate,
         )
     }
@@ -860,13 +959,14 @@ internal class WasapiStream(
             // value is rejected outright.
             val periodicity = if (shared) 0L else duration
 
+            var shortPeriod = false
             var hr = if (lowLatency) {
                 // The hybrid's output: the Windows engine at the period asked for, in frames, rather
                 // than at its default 10 ms. Only `EVENTCALLBACK` — this call refuses `NOPERSIST`
                 // with AUDCLNT_E_INVALID_STREAM_FLAG. A driver that will not do it gets the ordinary
                 // shared stream, said in the log, rather than no sound.
                 val h = ac.initializeSharedAudioStream(WasapiIds.STREAMFLAGS_EVENTCALLBACK, requestedFrames, format)
-                if (h == 0) h else {
+                if (h == 0) { shortPeriod = true; h } else {
                     Log.warn(
                         "wasapi",
                         "${dev.friendlyName()} refused a $requestedFrames-frame low-latency shared period " +
@@ -934,6 +1034,16 @@ internal class WasapiStream(
             val latency = ac.streamLatency100ns()
             if (isRender) {
                 renderFrames = frames; renderLatency100ns = latency
+                // What a wake takes, which the bridge must always hold. Exclusive: its buffer, every
+                // time. Shared: its period, which is about half its buffer — the short period the
+                // hybrid asked for, or the engine's own. Sized by the buffer instead, the bridge kept
+                // a needless millisecond on the hybrid and eleven on ordinary shared.
+                renderWakeFrames = when {
+                    !shared -> frames
+                    shortPeriod -> requestedFrames
+                    else -> runCatching { Math.ceilDiv(ac.devicePeriod()[0] * rate, 10_000_000L).toInt() }
+                        .getOrDefault(frames).coerceIn(1, frames)
+                }
             } else {
                 captureFrames = frames; captureLatency100ns = latency
             }
@@ -981,11 +1091,9 @@ internal class WasapiStream(
     }
 
     /**
-     * Fills the ring from the capture endpoint. When that endpoint runs at a rate of its own, each
-     * packet goes through a fixed-ratio [Resampler] first — the ratio between two nominal rates is
-     * exact, and the ppm by which the two crystals actually disagree is the render loop's drift
-     * correction's business, exactly as it is when the rates match. Everything the converter needs
-     * is allocated here, before the loop, on this thread while it may still allocate.
+     * Fills the bridge from the capture endpoint, at the endpoint's own rate: the bridge converts
+     * on the way out, and follows the drift with the same resampler (2.3.0). Everything this needs is
+     * allocated here, before the loop, on this thread while it may still allocate.
      */
     private fun captureLoop(
         ac: AudioClient,
@@ -1002,10 +1110,8 @@ internal class WasapiStream(
         val devPos = Memory(8)
         val qpc = Memory(8)
         val nextPacket = IntByReference()
-        val engineRate = request.sampleRate
-        val converter = if (captureRate != engineRate) Resampler(captureRate.toFloat(), engineRate.toFloat(), frames) else null
-        val raw = if (converter != null) FloatArray(frames) else null
-        val converted = if (converter != null) FloatArray(converter.maxOutputFrames) else null
+        val bridge = this.bridge
+        val raw = FloatArray(frames)
         val shared = captureShared
         ac.start()
         while (running) {
@@ -1018,38 +1124,67 @@ internal class WasapiStream(
                 if (shared) {
                     if (cc.call(5, nextPacket) != 0 || nextPacket.value == 0) break
                 }
-                if (cc.call(3, pdata, pframes, pflags, devPos, qpc) != 0) { xruns++; break }
+                if (cc.call(3, pdata, pframes, pflags, devPos, qpc) != 0) { xruns++; inputGaps++; break }
                 val n = pframes.value
             // AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY. The first packet after Start always carries
             // it — there genuinely is a discontinuity before the stream existed — so it only counts
             // once the stream is running.
-                if (pflags.value and 0x1 != 0 && primed) xruns++
-                val buf = pdata.value
-                var w = ringWrite
-                val ch = request.inputChannel.coerceIn(0, channels - 1)
-                if (converter == null) {
-                    if (buf != null) {
-                        for (f in 0 until n) ring[w++ and ringMask] = readSample(buf, f * channels + ch, bits, isFloat)
-                    } else {
-                        for (f in 0 until n) ring[w++ and ringMask] = 0f
+                if (pflags.value and 0x1 != 0 && primed) { xruns++; inputGaps++ }
+                // Whose lateness is it (2.3.0)? GetBuffer says when the packet's first frame was
+                // captured, as QPC in 100 ns units — the clock System.nanoTime reads on Windows. The
+                // device's own spacing of those is its regularity; how long after that this thread
+                // picked the packet up is ours. A bridge that has to absorb 20 ms of lateness needs to
+                // know which of the two it is absorbing.
+                val captured = qpc.getLong(0) * 100L
+                val pickedUp = System.nanoTime()
+                if (captured > 0) {
+                    val delay = pickedUp - captured
+                    if (primed && delay in 0..1_000_000_000L) {
+                        if (delay > maxPickupNanos) maxPickupNanos = delay
+                        if (delay > 5_000_000L) pickupsOver5Ms++
                     }
-                } else {
-                    // In slices no larger than the converter was sized for: a shared-mode packet is
-                    // at most the buffer, but the loop should not depend on that.
-                    var done = 0
-                    while (done < n) {
-                        val take = minOf(n - done, raw!!.size)
-                        if (buf != null) {
-                            for (f in 0 until take) raw[f] = readSample(buf, (done + f) * channels + ch, bits, isFloat)
-                        } else {
-                            for (f in 0 until take) raw[f] = 0f
+                    val last = lastCapturedNanos
+                    if (primed && last > 0) {
+                        val spacing = captured - last
+                        if (spacing > maxDeviceGapNanos) maxDeviceGapNanos = spacing
+                        // Captured further apart than the last packet lasted: the device stopped, and
+                        // those frames never existed. The bridge is told, so the dropout this causes
+                        // is not charged as lateness (2.3.0).
+                        val heldFor = lastPacketFrames * 1_000_000_000L / captureRate
+                        val missing = spacing - heldFor
+                        if (lastPacketFrames > 0 && missing > HOLE_NANOS) {
+                            bridge.noteHole((missing * captureRate / 1_000_000_000L).toInt())
                         }
-                        val produced = converter.process(raw, take, converted!!)
-                        for (f in 0 until produced) ring[w++ and ringMask] = converted[f]
-                        done += take
                     }
+                    lastCapturedNanos = captured
                 }
-                ringWrite = w
+                // And are the frames all there? The device's position counts every frame it has
+                // captured; one that moved by more than the last packet means frames that never came.
+                val position = devPos.getLong(0)
+                val expected = lastDevicePosition + lastPacketFrames
+                if (primed && lastDevicePosition >= 0 && position > expected) {
+                    framesSkipped += position - expected
+                    skipEvents++
+                }
+                lastDevicePosition = position
+                lastPacketFrames = n
+                val buf = pdata.value
+                val ch = request.inputChannel.coerceIn(0, channels - 1)
+                // When it landed: the bridge counts what the input accrues after it.
+                val landed = System.nanoTime()
+                var done = 0
+                while (done < n) {
+                    // In slices no larger than the scratch array: a shared-mode packet is at most the
+                    // buffer, but the loop should not depend on that.
+                    val take = minOf(n - done, raw.size)
+                    if (buf != null) {
+                        for (f in 0 until take) raw[f] = readSample(buf, (done + f) * channels + ch, bits, isFloat)
+                        bridge.write(raw, take, landed)
+                    } else {
+                        bridge.writeSilence(take, landed)
+                    }
+                    done += take
+                }
                 cc.call(4, n)
                 if (!shared) break
             }
@@ -1083,22 +1218,14 @@ internal class WasapiStream(
         val periodNanos = frames * 1_000_000_000L / negotiatedRate
         val shared = renderShared
 
-        // The most the ring may hold at a render wake before a frame is dropped (2.1.5).
-        //
-        // Capture lands in packets of one capture period, so the level seen at a render wake swings
-        // by up to that much with nothing wrong: a ring running as tight as it safely can reads
-        // between one render buffer and one render buffer plus one capture packet. Anything above
-        // that, plus a margin for the two threads' wake jitter, is latency nobody needs. Until 2.1.5
-        // the ceiling was three render buffers, so a capture clock running fast — or a capture
-        // stream that started before the render one — left two whole periods in the ring for good,
-        // undeclared. A capture clock running slow already sat at the floor, so this asks of
-        // nobody a margin a slow-capture pair was not already running on. Exclusive only: shared
-        // mode's `want` is the free space and keeps the old rule.
-        val captureInEngineFrames = Math.ceilDiv(captureTargetFrames.toLong() * negotiatedRate, captureRate.toLong()).toInt()
-        val ringCeiling = frames + captureInEngineFrames + maxOf(captureInEngineFrames / 2, negotiatedRate / 1000)
-
-        // The hybrid steers its ring by the low point over a window instead; see LowPointRegulator.
-        val regulator = if (lowLatencyRender) LowPointRegulator(negotiatedRate, captureInEngineFrames) else null
+        // The output reads through the bridge, which never splices; see ClockBridge. Its code is
+        // compiled here, before the stream starts, on a throwaway copy, and it is sized for what a
+        // wake actually takes — the period, not the buffer, on a shared output.
+        val bridge = this.bridge
+        val wake = renderWakeFrames.takeIf { it > 0 } ?: frames
+        bridge.warmUp(wake)
+        bridge.begin(wake)
+        var bridgeUnderruns = 0
         val padding = IntByReference()
 
         // Pre-roll one buffer of silence: an exclusive-mode render client started empty underruns
@@ -1121,6 +1248,9 @@ internal class WasapiStream(
             // milliseconds on the hybrid, and the convenience method allocates one per call.
             val want = if (shared) {
                 if (ac.call(6, padding) != 0) continue
+                // Nothing left queued at a wake: the engine has already played past the end of what
+                // was written.
+                if (padding.value == 0 && primed) outputDry++
                 frames - padding.value
             } else frames
             if (want <= 0) continue
@@ -1170,47 +1300,14 @@ internal class WasapiStream(
                 }
             }
 
-            // Drain the ring. The two endpoints are on separate crystals, so its level wanders;
-            // one frame added or dropped per period is ~340 ppm of authority against real drift of
-            // tens of ppm, and is inaudible where a whole dropped block would not be.
-            var r = ringRead
-            var available = ringWrite - r
-            var skip = 0
-            var hold = false
-            // Frames to take from the ring; the rest of the wake is silence. The hybrid's regulator
-            // says how many (2.2.4); the other modes read what there is.
-            var take = want
-            if (regulator != null) {
-                regulator.decide(available, want)
-                skip = regulator.drop
-                hold = regulator.hold
-                take = regulator.read
-                if (regulator.underrun) xruns++
-                if (skip > 0 || hold) driftCorrections++
-                primed = regulator.primed
-            } else {
-                val ceiling = if (shared) want * 3 else ringCeiling
-                // The ring is empty until the capture side has produced its first period, so the first
-                // few render callbacks legitimately have nothing to play. Counting those as xruns would
-                // report a dropout on every single start, which trains the user to ignore the counter.
-                if (!primed && available >= want) {
-                    // A capture stream that started first has queued audio the render side never saw;
-                    // left there it is latency for the life of the stream, drained a frame a period.
-                    // Nothing has been heard yet, so cut it to the ceiling in one go.
-                    if (!shared && available > ceiling) { r += available - ceiling; available = ceiling }
-                    primed = true
-                }
-                if (available > ceiling) { skip = 1; driftCorrections++ }
-                if (primed && available < want) xruns++
-                if (available in want until want + 2) { hold = true; driftCorrections++ }
-            }
-            r += skip
-            for (i in 0 until take) {
-                inputBlock[i] = if (r != ringWrite) ring[r++ and ringMask] else 0f
-            }
-            for (i in take until want) inputBlock[i] = 0f
-            if (hold) r--   // hold one frame back: it is read again next time
-            ringRead = r
+            // Exactly `want` frames, resampled from the input at whatever ratio the drift needs. A
+            // dropout is counted once, however many wakes the refill takes.
+            bridge.read(inputBlock, want, System.nanoTime())
+            // A cut is heard as well as a dropout is, so both count: the health line is written when
+            // this moves, and a cut that never reached the log was heard with nothing to show.
+            val u = bridge.underruns + bridge.backlogCuts
+            if (u != bridgeUnderruns) { xruns += u - bridgeUnderruns; bridgeUnderruns = u }
+            if (bridge.playing) primed = true
 
             callback.render(inputBlock, outputBlock, want)
 
@@ -1237,6 +1334,9 @@ internal class WasapiStream(
 
         /** Hidden delay below this is the clock's own jitter, not worth a correction. */
         const val HIDDEN_FLOOR_MS = 2
+
+        /** A gap in the input's capture timestamps longer than its packet by this much is a hole. */
+        const val HOLE_NANOS = 2_000_000L
 
         /**
          * Frames the output holds beyond what [base] reports, given [queuedFrames] written and not

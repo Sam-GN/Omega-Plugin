@@ -135,20 +135,54 @@ check — see "Check for updates" below. The three:
     exclusive, the output shared at `IAudioClient3`'s shortest period (`WasapiHybridBackend`).
     Hybrid exists because an exclusive output can hide latency: a Cirrus Logic SoundWire laptop
     output reported a 4 ms buffer while its own `IAudioClock` showed 102 ms written and not played,
-    at every size, and 2.4 ms through the engine at 96 frames. **Exclusive and shared must not be
-    moved onto hybrid's rules**; it is a separate choice so no working machine changes. Its ring is
-    steered by `LowPointRegulator` (the lowest level over a window, not the level at one wake),
-    tested against simulated clocks in `LowPointRegulatorTest`. **The render loop reads only
-    `LowPointRegulator.read` frames** (2.2.4): nothing until the ring reaches a wake plus a packet
-    plus the margin, and on an underrun only what lies above a packet and the margin. Reading what
-    there was, as before, primed the ring 2 ms over and then emptied it at every underrun, which
-    repeated the shortfall every third wake on the shared fallback — 26 dropouts in 30 s on
-    Bluetooth earbuds, 0 after. The simulations read the ring the same way; keep them in step. Since 2.2.1 exclusive also
+    at every size, and 2.4 ms through the engine at 96 frames. **Exclusive and shared keep their
+    own endpoint modes** — hybrid is a separate choice so no machine's output path changes. What
+    they share is the join between the clocks: **since 2.3.0 every WASAPI mode joins its clocks
+    with `audio/ClockBridge`, which never splices a sample** — hybrid first, exclusive and shared
+    once measured on the Pocket Master (two devices on exclusive: 12 splices and 45 dropouts a
+    minute before, none spliced and 4 dropouts after; one device: 2 splices before, none after, at
+    4.7 ms more round trip, which the bridge's 0.7 ms resampler delay, 1 ms safety margin and 3 ms
+    starting allowance account for). The rule that decided it: a fix goes wherever the defect
+    exists, measured, and nowhere it does not. The bridge is sized by the output's wake — its
+    period, not its buffer, on a shared output (`renderWakeFrames`). The
+    capture thread writes the input at its own rate, timestamped as it lands; the render thread
+    reads exactly what the wake wants through `dsp/SincInterpolator` at a ratio of nominal times
+    `1 + c`, so the one resampler does the C conversion and the drift together. `c` comes from a
+    slow PI loop on the level measured as if the input arrived continuously (the sawtooth would
+    otherwise alias against the output's period), and the level's target is learned from the
+    input's lateness. **Two rules the hardware taught, both with tests that fail without them:**
+    the target never drops below the floor plus the worst lateness seen this session plus 1 ms,
+    and drops at all only after a quiet minute — the first build lowered after ten seconds, walked
+    the allowance to zero and dropped out at the next late packet (13 in ten minutes against a 6 ms
+    spike every 20 s); and a level held 8 ms over the target for 30 ms is a backlog, the late
+    packets of a stall landing after the refill, and is cut with a 3 ms crossfade rather than
+    drained at 2000 ppm, which kept it as delay for half a minute. The input's timing is logged
+    (longest gap, packets over 2 and 5 ms late), so a dropout report says what the device did.
+    It replaced `LowPointRegulator`, which steered by deleting or repeating
+    single samples and mistook a USB input's lateness for drift: 12 565 splices and 20 dropouts in
+    88 s on a Pocket Master into a Cirrus output. `ClockBridgeTest` drives it with simulated clocks
+    and **measures the sound** — a 1 kHz tone's broadband noise, 107 dB down where splicing gave 28
+    — and a test that the measure fails the old behaviour. ALSA's two-clock pairs use the bridge
+    too (see `audio/alsa/` below); Java Sound is measured separately (see "Java Sound only"). Since 2.2.1 exclusive also
     **reports** that hidden delay: the render thread reads `IAudioClock` 32 times after 100 settled
     wakes (preallocated, before the period is written), and `WasapiStream.format` adds the median
     excess over the reported output latency as `StreamFormat.hiddenOutputLatencyFrames`. The window
     polls `format`, so no event is fired — `onFormatChanged` re-prepares the chain and must not be
     used for a figure that changes nothing the DSP sees.
+  - `audio/hybrid/` — **ASIO hybrid** (2.3.0): an ASIO input and WASAPI hybrid's output, joined by
+    `ClockBridge`. Composed, not reimplemented: `AsioBackend` opens the driver as always with a
+    callback that writes the input into the bridge and the interface's outputs silence, and
+    `WasapiBackend.openRenderOnly` runs a `WasapiStream` with an external bridge and no capture
+    thread (`externalBridge`; null for every WASAPI mode, which then behaves exactly as before).
+    Devices are both backends' lists under `asio:` and `out:` ids. `BackendId.ASIO_HYBRID` is
+    appended to the enum, not inserted — inserting `WASAPI_HYBRID` once cost `ALSA` its place.
+    **The bridge tells holes from lateness**: a dropout raises the target only if the audio came
+    late; a hole — reported by a WASAPI input from its capture timestamps (`noteHole`), or judged
+    by an ASIO one's delivery falling short after it resumes — adds nothing, since no latency would
+    have covered audio that was never captured. Built after the Pocket Master's input was measured
+    pausing 15-72 ms on every driver, plain ASIO included, on a laptop on battery with USB
+    selective suspend on; ASIO's health line now reports its longest gap between callbacks, the
+    only figure that shows a one-clock pause.
   - `audio/jack/` — Linux's primary path, and PipeWire's through its JACK library. One clock, the
     server's realtime thread, so it is shaped like ASIO. Each client owning hardware ports is a
     device. `JackLibrary` tries PipeWire's shim **by path** before the system `libjack.so.0` when
@@ -157,9 +191,15 @@ check — see "Check for updates" below. The three:
   - `audio/alsa/` — Linux's always-present rung: `Default` through the sound server, or `hw:`
     straight to a card. Capture and playback are separate `BackendDevice`s (`in:`/`out:` ids),
     because `capabilities()` must know which direction it is answering for. The thread is ours.
-    A same-rate pair runs in lockstep (read a period, render, write); a converted input runs
-    `convertingLoop`, driven by the output, with the input going through a `Resampler` into a
-    `CaptureReservoir`.
+    A pair on one clock — one card, or `default` both ways (`clockOf`) — runs in lockstep (read a
+    period, render, write). A pair on two clocks — a converted rate, two cards, or a card against
+    the server — runs `bridgedLoop`, driven by the output, with the input going into a
+    `ClockBridge` stamped by `snd_pcm_htimestamp` on CLOCK_MONOTONIC, the clock `System.nanoTime`
+    reads (2.3.0). Before, a converted input spliced a frame per drift correction in
+    `CaptureReservoir`, and a same-rate pair on two cards had no correction at all and ran until
+    one side broke. **Untested on hardware so far**: simulated in `ClockBridgeTest` at ALSA's
+    period choices, with and without stamps — without, an exact 2:1 of periods makes the level
+    wobble on the clocks' slow beat (+22 ppm read against a true -100), never a dropout.
   - `audio/linux/` — `LinuxRt` (realtime via `SCHED_FIFO`, else rtkit over D-Bus) and
     `LinuxPlatform` (the OS check). **They are separate on purpose**: `LinuxRt` declares JNA
     interfaces, so touching it loads JNA, and the OS check is what has to work when JNA does not.
@@ -379,16 +419,15 @@ sees a JACK entry and the Windows picker is exactly what it was before Linux exi
   does — can be a hair short, and a driver that floors grants a frame less. At 44.1 kHz that
   refused every size on a Cirrus Logic SoundWire output until 2.1.5.
 - **The engine runs at the output's rate; only the input is ever converted.** See `SampleRates`.
-  On a two-clock backend that sets `convertsInput` (WASAPI, both modes) the picker offers the
-  output's rates, and one the input cannot do is marked `C`: the capture endpoint opens at its own
-  rate and its packets go through the chain's fixed-ratio `Resampler` on the way into the ring,
-  which already absorbs uneven counts; the ppm drift between the two crystals is the render loop's
-  existing correction, exactly as at equal rates. The output is never converted — the round trip
-  is set by the hardware periods in milliseconds and the engine's rate only changes how many
-  frames that is, and the render side has no ring to absorb a resampler's uneven counts. ALSA
-  converts too since 1.7.0, but its lockstep loop has nowhere to put uneven counts either, so a
-  converted ALSA stream runs `convertingLoop` instead: the output drives it and a
-  `CaptureReservoir` holds the converted input, correcting drift by a frame at a time. A backend
+  On a two-clock backend that sets `convertsInput` (every WASAPI mode, ASIO hybrid) the picker
+  offers the output's rates, and one the input cannot do is marked `C`: the capture endpoint opens
+  at its own rate and its packets go into the `ClockBridge` as they are, which converts on the way
+  out with the same resampler that follows the drift between the two crystals (2.3.0; before, a
+  fixed-ratio `Resampler` sat on the way in and the drift was spliced). The output is never
+  converted — the round trip is set by the hardware periods in milliseconds and the engine's rate
+  only changes how many frames that is. ALSA
+  converts too since 1.7.0, through the same bridge since 2.3.0, in `bridgedLoop`: its lockstep
+  loop has nowhere to put uneven counts, so a converted ALSA stream is driven by the output. A backend
   without the converter (JACK, where the server owns the one rate) offers the intersection. Before
   1.6.0 nothing converted, on the belief that it would cost more than the backend saved; measured,
   it is 32 frames at the input's rate, 0.7 ms, against a ring hop of a whole period. A backend
@@ -1003,15 +1042,14 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-533 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+545 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`
 digest, `InstallerTest` against temp folders with the launch injected, and
 `NoNetworkOutsideUpdaterTest`, which is the promise on the About dialog as a test. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
-it runs on Windows too. `CaptureReservoirTest` drives the converting reservoir with a simulated pair
-of devices whose clocks are set 100 ppm apart, for twenty minutes of periods. The useful patterns are impulse
+it runs on Windows too, and pins `clockOf`, the rule for which pairs are bridged. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
 extreme settings, and decay over time (`ReverbTest`).
 
@@ -1052,7 +1090,14 @@ you worked out yourself, not against what the code currently returns:
   throws yields silence and a flag rather than noise, short blocks leave the buffer tail alone, and
   meter ballistics attack instantly and release slowly. It also asserts that `render` **allocates
   under 64 kB over 20 000 blocks**, measured with `getCurrentThreadAllocatedBytes` — a bytes
-  assertion rather than a timing one, because allocation is what triggers the collection. The split
+  assertion rather than a timing one, because allocation is what triggers the collection. **Read
+  the counter through `org.example.Allocation` (in the tests), nowhere else.** Until 2.3.0 every
+  such check read it by reflection, which Java 21's module system refuses; the helper returned -1,
+  each test returned early on it, and all seven passed without measuring anything. The helper reads
+  `com.sun.management.ThreadMXBean` directly, fails rather than skips if the counter is missing,
+  and does its checks once at first use — a read inside the measured stretch must be the counter
+  alone, since kotlin.test's assertions allocate. With a four-float array (32 bytes) planted in
+  every block, the checks report 640 000 over 20 000 blocks. The split
   tests sit beside those: an idle second board is never run, the sum arrives by a fade and leaves by
   one, the post stage sees the sum, and the allocation bound holds with both boards running, and
   again with the looper playing three lanes and recording a fourth.

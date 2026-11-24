@@ -729,10 +729,9 @@ class TransportTest {
         val scratch = FloatArray(256)
 
         repeat(2_000) { transport.mix(scratch, 256) }
-        val before = allocatedBytes()
-        if (before < 0) return
+        val before = org.example.Allocation.currentThreadBytes()
         repeat(20_000) { transport.mix(scratch, 256) }
-        val allocated = allocatedBytes() - before
+        val allocated = org.example.Allocation.currentThreadBytes() - before
         assertTrue(
             allocated < 64 * 1024,
             "mix() allocated $allocated bytes over 20 000 blocks with the kit running",
@@ -745,24 +744,15 @@ class TransportTest {
         val scratch = FloatArray(256)
 
         repeat(2_000) { transport.mix(scratch, 256) }          // let the JIT settle first
-        val before = allocatedBytes()
-        if (before < 0) return                                  // not a HotSpot JVM; nothing to assert
+        val before = org.example.Allocation.currentThreadBytes()
         repeat(20_000) { transport.mix(scratch, 256) }
-        val allocated = allocatedBytes() - before
+        val allocated = org.example.Allocation.currentThreadBytes() - before
         assertTrue(
             allocated < 64 * 1024,
             "mix() allocated $allocated bytes over 20 000 blocks; it runs on the audio thread",
         )
     }
 
-    private fun allocatedBytes(): Long = try {
-        val bean = java.lang.management.ManagementFactory.getThreadMXBean()
-        val method = bean.javaClass.getMethod("getCurrentThreadAllocatedBytes")
-        method.isAccessible = true
-        method.invoke(bean) as Long
-    } catch (_: Throwable) {
-        -1L
-    }
 
     private companion object {
         /** Refractory gap between onsets, in samples. See [onsets] for why it is not a quiet run. */

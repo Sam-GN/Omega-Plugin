@@ -2763,7 +2763,8 @@ class MainWindow : JFrame("Omega-Plugin") {
             "$prefix — realtime ${"%.4f".format(engine.realtimeRatio)}, " +
                 "xruns ${engine.xruns}, deadline misses ${engine.deadlineMisses}, " +
                 "worst callback ${engine.worstCallbackMicros} us, " +
-                "load ${"%.0f".format(engine.loadPercent * 100)} %.",
+                "load ${"%.0f".format(engine.loadPercent * 100)} %." +
+                (engine.healthNote?.let { " ($it)" } ?: ""),
         )
     }
 

@@ -56,6 +56,7 @@ object Backends {
         "org.example.audio.wasapi.WasapiBackend" to "Windows",
         "org.example.audio.wasapi.WasapiSharedBackend" to "Windows",
         "org.example.audio.wasapi.WasapiHybridBackend" to "Windows",
+        "org.example.audio.hybrid.AsioHybridBackend" to "Windows",
         "org.example.audio.jack.JackBackend" to "Linux",
         "org.example.audio.alsa.AlsaBackend" to "Linux",
     )
@@ -146,6 +147,7 @@ object Backends {
      */
     private class Broken(className: String, cause: Throwable) : AudioBackend {
         override val id: BackendId = when {
+            className.endsWith("AsioHybridBackend") -> BackendId.ASIO_HYBRID
             className.contains(".asio.") -> BackendId.ASIO
             className.endsWith("WasapiSharedBackend") -> BackendId.WASAPI_SHARED
             className.endsWith("WasapiHybridBackend") -> BackendId.WASAPI_HYBRID

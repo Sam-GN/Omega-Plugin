@@ -54,7 +54,7 @@ class BackendSeamTest {
         // ASIO it can never have. Runs on both CI legs, so each half is checked where it matters.
         val ids = Backends.all().map { it.id }.toSet()
         val os = System.getProperty("os.name", "")
-        val windowsOnly = setOf(BackendId.ASIO, BackendId.WASAPI_EXCLUSIVE, BackendId.WASAPI_HYBRID, BackendId.WASAPI_SHARED)
+        val windowsOnly = setOf(BackendId.ASIO, BackendId.WASAPI_EXCLUSIVE, BackendId.WASAPI_HYBRID, BackendId.WASAPI_SHARED, BackendId.ASIO_HYBRID)
         val linuxOnly = setOf(BackendId.JACK, BackendId.ALSA)
         when {
             os.startsWith("Windows") -> {

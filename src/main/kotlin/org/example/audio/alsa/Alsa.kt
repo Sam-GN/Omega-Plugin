@@ -68,6 +68,13 @@ internal interface AlsaApi : Library {
     fun snd_pcm_sw_params_set_avail_min(pcm: Pointer, params: Pointer, frames: Long): Int
     fun snd_pcm_sw_params(pcm: Pointer, params: Pointer): Int
 
+    // Capture timestamps (2.3.0): when the device position last moved, on CLOCK_MONOTONIC — the clock
+    // System.nanoTime reads on Linux — so the clock bridge knows when audio was captured, not just
+    // when the loop looked. A library without the type call keeps the default and the bridge falls
+    // back to the time it read.
+    fun snd_pcm_sw_params_set_tstamp_mode(pcm: Pointer, params: Pointer, mode: Int): Int
+    fun snd_pcm_sw_params_set_tstamp_type(pcm: Pointer, params: Pointer, type: Int): Int
+
     fun snd_pcm_link(a: Pointer, b: Pointer): Int
     fun snd_pcm_unlink(pcm: Pointer): Int
 
@@ -76,6 +83,8 @@ internal interface AlsaApi : Library {
         const val STREAM_CAPTURE = 1
         const val NONBLOCK = 1
         const val ACCESS_RW_INTERLEAVED = 3
+        const val TSTAMP_ENABLE = 1
+        const val TSTAMP_TYPE_MONOTONIC = 1
 
         const val FORMAT_S16_LE = 2
         const val FORMAT_S32_LE = 10
@@ -115,6 +124,9 @@ internal object AlsaRt {
     @JvmStatic external fun snd_pcm_prepare(pcm: Pointer): Int
     @JvmStatic external fun snd_pcm_start(pcm: Pointer): Int
     @JvmStatic external fun snd_pcm_drop(pcm: Pointer): Int
+
+    /** `avail` and `tstamp` are the addresses of a `snd_pcm_uframes_t` and a `struct timespec`. */
+    @JvmStatic external fun snd_pcm_htimestamp(pcm: Pointer, avail: Long, tstamp: Long): Int
 
     @Volatile
     private var registered = false

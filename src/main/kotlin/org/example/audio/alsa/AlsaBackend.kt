@@ -43,7 +43,7 @@ import org.example.audio.alsa.AlsaApi.Companion.EPIPE
 import org.example.audio.alsa.AlsaApi.Companion.ESTRPIPE
 import org.example.audio.linux.LinuxPlatform
 import org.example.audio.linux.LinuxRt
-import org.example.dsp.Resampler
+import org.example.audio.ClockBridge
 import org.example.util.Log
 import java.io.File
 import java.nio.ByteBuffer
@@ -75,8 +75,8 @@ class AlsaBackend : AudioBackend {
     override val id = BackendId.ALSA
 
     /**
-     * A capture PCM at a rate of its own is converted on the way into a [CaptureReservoir], and the
-     * output's clock drives the loop. Same-rate pairs keep the lockstep loop, untouched.
+     * A capture PCM at a rate of its own — or on a clock of its own — goes into a [ClockBridge],
+     * and the output's clock drives the loop. One clock at one rate keeps the lockstep loop, untouched.
      */
     override val convertsInput: Boolean get() = true
 
@@ -234,19 +234,28 @@ class AlsaBackend : AudioBackend {
         val rate = request.sampleRate
         val inCaps = capabilities(input, rate)
         val captureRate = SampleRates.captureRate(rate, inCaps.sampleRates, inCaps.preferredSampleRate)
-        val capturePeriod = if (captureRate == rate) request.bufferFrames else {
+        val captureName = split(input.id).first
+        val playbackName = split(output.id).first
+        // Two clocks — a converted rate, two cards, or a card against the sound server — go through
+        // the clock bridge (2.3.0). One clock keeps the lockstep loop: there is no drift to follow.
+        val bridged = captureRate != rate || clockOf(captureName) != clockOf(playbackName)
+        if (captureRate != rate) {
             Log.info(
                 "alsa",
                 "${input.name} does not do $rate Hz; opening it at $captureRate Hz and converting " +
                     "(+${"%.2f".format(SampleRates.conversionMs(captureRate))} ms).",
             )
+        } else if (bridged) {
+            Log.info("alsa", "${input.name} and ${output.name} run on two clocks; joining them by resampling.")
+        }
+        val capturePeriod = if (!bridged) request.bufferFrames else {
             convertedCapturePeriod(request.bufferFrames, rate, captureRate, inCaps.bufferSizes)
         }
 
         val stream = AlsaStream(
-            captureName = split(input.id).first,
+            captureName = captureName,
             captureLabel = input.name,
-            playbackName = split(output.id).first,
+            playbackName = playbackName,
             playbackLabel = output.name,
             inputChannel = request.inputChannel,
             outputChannels = request.outputChannels.copyOf(),
@@ -254,6 +263,7 @@ class AlsaBackend : AudioBackend {
             period = request.bufferFrames,
             captureRate = captureRate,
             capturePeriod = capturePeriod,
+            bridged = bridged,
             callback = callback,
             events = events,
         )
@@ -289,12 +299,23 @@ class AlsaBackend : AudioBackend {
 }
 
 /**
- * The capture period for a converted input: about half an output period, from the sizes the input
+ * Which clock a PCM runs on, for deciding whether a pair needs the clock bridge: a card's own
+ * crystal for `hw:CARD=X,DEV=n` — every device on one card shares it — and the sound server's for
+ * anything else, `default` both ways being one server and one graph clock.
+ */
+internal fun clockOf(pcmName: String): String {
+    if (!pcmName.startsWith("hw:")) return "server"
+    val card = pcmName.substringAfter("CARD=", missingDelimiterValue = "").substringBefore(',')
+    return if (card.isNotEmpty()) "card:$card" else "card:" + pcmName.removePrefix("hw:").substringBefore(',')
+}
+
+/**
+ * The capture period on two clocks: about half an output period, from the sizes the input
  * actually accepts at its own rate.
  *
- * Half, because the converted input arrives in lumps of one capture period, and the reservoir has
- * to hold a lump's worth on top of a period to ride them out. A smaller lump is a shallower
- * reservoir, which is latency saved; [MIN_CAPTURE_PERIOD] keeps it above the bus's own granularity.
+ * Half, because the input arrives in lumps of one capture period, and the bridge has
+ * to hold half a lump on top of a period to ride them out. A smaller lump is a shallower
+ * bridge, which is latency saved; [MIN_CAPTURE_PERIOD] keeps it above the bus's own granularity.
  */
 internal fun convertedCapturePeriod(period: Int, rate: Int, captureRate: Int, sizes: List<Int>): Int {
     val equivalent = Math.round(period.toFloat() * captureRate / rate)
@@ -334,11 +355,14 @@ internal fun openPcmOrError(name: String, stream: Int): Pair<Pointer?, String?> 
  * Both PCMs are opened non-blocking and waited on with `snd_pcm_wait`, which has a timeout. A
  * blocking read on a card that has just been unplugged can stay blocked; this loop cannot.
  *
- * **When the input runs at a rate of its own** ([captureRate] differs from [rate]) the lockstep
- * cannot work: a converted period is never a whole engine period. Then the output's clock drives
- * [convertingLoop] instead, and the input goes through a fixed-ratio [Resampler] into a
- * [CaptureReservoir], which also takes up the drift between the two crystals. The same-rate path is
- * the loop above and behaves exactly as it did; the two share only the write and the counters.
+ * **When the two sides run on two clocks** — the input at a rate of its own, two cards, or a card
+ * against the sound server — the lockstep cannot work: a converted period is never a whole engine
+ * period, and two crystals drift until one side runs dry. Then the output's clock drives
+ * [bridgedLoop] instead, and the input goes into a [ClockBridge] at its own rate, stamped with when
+ * it was captured; the bridge converts and follows the drift by resampling, never splicing (2.3.0;
+ * before, a fixed-ratio converter fed a reservoir that spliced a frame per correction, and a
+ * same-rate pair on two cards had no correction at all). One clock keeps the loop above, exactly
+ * as it was; the two share only the write and the counters.
  */
 internal class AlsaStream(
     private val captureName: String,
@@ -353,6 +377,8 @@ internal class AlsaStream(
     private val captureRate: Int = rate,
     /** The capture PCM's period, in its own frames. Equal to [period] unless converted. */
     private val capturePeriod: Int = period,
+    /** Two clocks: the output drives and a [ClockBridge] joins them. See the class note. */
+    private val bridged: Boolean = captureRate != rate,
     private val callback: AudioCallback,
     private val events: StreamEvents,
 ) : AudioStream {
@@ -386,12 +412,16 @@ internal class AlsaStream(
     private val inputBlock = FloatArray(period)
     private val outputBlock = FloatArray(period)
 
-    // Converting only. Built here, on the opening thread, so the loop allocates nothing.
-    private val converter =
-        if (captureRate != rate) Resampler(captureRate.toFloat(), rate.toFloat(), capturePeriod) else null
-    private val rawInput = FloatArray(if (converter != null) capturePeriod else 0)
-    private val convertedInput = FloatArray(converter?.maxOutputFrames ?: 0)
-    private val reservoir = converter?.let { CaptureReservoir(period, it.maxOutputFrames) }
+    // Two clocks only. Built here, on the opening thread, so the loop allocates nothing.
+    private val bridge = if (bridged) ClockBridge(captureRate, rate, capturePeriod) else null
+    private val rawInput = FloatArray(if (bridged) capturePeriod else 0)
+
+    /** `snd_pcm_htimestamp`'s answer: an `avail` and a `struct timespec`, 8 + 16 bytes. */
+    private val stampMemory = if (bridged) Memory(24).apply { clear() } else null
+    private val stampAddress = stampMemory?.let { Pointer.nativeValue(it) } ?: 0L
+
+    /** The capture PCM took the timestamp settings, so its stamps are monotonic and mean something. */
+    private var stamped = false
     private val periodNanos = period * 1_000_000_000L / rate
     private val waitMillis = maxOf(20, (period * 4000L / rate).toInt())
 
@@ -406,10 +436,16 @@ internal class AlsaStream(
     override var deadlineMisses: Int = 0
         private set
 
-    /** Frames the reservoir held back or skipped against drift. Converting only. */
-    @Volatile
-    var driftCorrections: Int = 0
-        private set
+    /** How the clock bridge is doing, when there is one (2.3.0). */
+    override val healthNote: String?
+        get() {
+            val b = bridge ?: return null
+            return "bridge dropouts ${b.underruns}, drift ${"%+.0f".format(b.correctionPpm)} ppm, " +
+                "bridge ${"%.1f".format(b.targetMs)} ms, backlogs cut ${b.backlogCuts}, " +
+                "worst lateness ${"%.1f".format(b.peakLatenessMs)} ms, dropouts that were holes ${b.holesForgiven}, " +
+                "capture timestamps ${if (stamped) "on" else "off"}; input: longest gap " +
+                "${"%.1f".format(b.longestGapMs)} ms, late >2 ms ${b.lateOver2Ms}, >5 ms ${b.lateOver5Ms}"
+        }
 
     @Volatile
     override var worstCallbackMicros: Int = 0
@@ -436,8 +472,16 @@ internal class AlsaStream(
     private var thread: Thread? = null
     private var monitor: Thread? = null
 
-    override lateinit var format: StreamFormat
-        private set
+    private lateinit var baseFormat: StreamFormat
+
+    /** As configured, with the bridge's level as it moves. Read off the audio thread. */
+    override val format: StreamFormat
+        get() {
+            val base = baseFormat
+            val live = bridge?.latencyFrames ?: return base
+            if (live <= 0 || live == base.adapterLatencyFrames) return base
+            return base.copy(adapterLatencyFrames = live).also { baseFormat = it }
+        }
 
     override val realtimeRatio: Float
         get() {
@@ -456,18 +500,22 @@ internal class AlsaStream(
         val (p, pErr) = openPcmOrError(playbackName, AlsaApi.STREAM_PLAYBACK)
         playback = p ?: throw AudioBackendException(pErr ?: "Could not open $playbackLabel")
 
-        // Converted, the input is read once per *output* period in lumps of its own smaller period,
+        // Bridged, the input is read once per *output* period in lumps of its own smaller period,
         // so its buffer is sized to hold eight output periods' worth, as the lockstep's does.
-        val captureBufferPeriods = if (reservoir == null) 8 else {
+        val captureBufferPeriods = if (bridge == null) 8 else {
             maxOf(8, Math.ceil(8.0 * period * captureRate / rate / capturePeriod).toInt())
         }
-        val cap = setUp(c, captureLabel, inputChannel + 1, captureRate, capturePeriod, captureBufferPeriods)
+        val cap = setUp(
+            c, captureLabel, inputChannel + 1, captureRate, capturePeriod, captureBufferPeriods,
+            timestamps = bridge != null,
+        )
         inFormat = cap.format; inChannels = cap.channels
+        stamped = cap.timestamped
         // Driven by the output, the loop must wait until the queue is down to one period before
         // writing the next, or it would fill the whole buffer and add two periods of latency.
         val play = setUp(
             p, playbackLabel, (outputChannels.maxOrNull() ?: 0) + 1, rate, period, bufferPeriods = 4,
-            queueLimit = if (reservoir != null) (PREFILL - 1) * period else null,
+            queueLimit = if (bridge != null) (PREFILL - 1) * period else null,
         )
         outFormat = play.format; outChannels = play.channels
         playbackReadyAt = play.readyAt
@@ -482,12 +530,11 @@ internal class AlsaStream(
         outAddress = Pointer.nativeValue(outMemory)
         outMask = BooleanArray(outChannels) { ch -> outputChannels.contains(ch) }
 
-        // One card, one clock: link them so they start on the same sample. Refused across cards,
-        // which is fine — then they are started back to back and drift is the price. Never when
-        // converting: two rates are two clocks whatever card they are on.
-        linked = reservoir == null && AlsaLibrary.api.snd_pcm_link(c, p) == 0
+        // One card, one clock: link them so they start on the same sample. Never when bridged: two
+        // clocks are two clocks whatever the link says.
+        linked = bridge == null && AlsaLibrary.api.snd_pcm_link(c, p) == 0
 
-        format = if (reservoir == null) {
+        baseFormat = if (bridge == null) {
             StreamFormat(
                 sampleRate = rate,
                 bufferFrames = period,
@@ -501,15 +548,15 @@ internal class AlsaStream(
                 bufferFrames = period,
                 inputLatencyFrames = Math.round(capturePeriod.toFloat() * rate / captureRate),
                 outputLatencyFrames = period * PREFILL,
-                // The reservoir's depth and the converter's delay. Declared, not hidden.
-                adapterLatencyFrames = reservoir.latencyFrames + SampleRates.conversionFrames(captureRate, rate),
+                // The bridge's level, which includes its resampler's delay. Declared, not hidden.
+                adapterLatencyFrames = bridge.startingLatencyFrames(period),
                 inputRate = captureRate,
             )
         }
     }
 
     /** What a PCM was configured to, and the `avail` at which it reports itself ready. */
-    private class Granted(val format: Int, val channels: Int, val readyAt: Long)
+    private class Granted(val format: Int, val channels: Int, val readyAt: Long, val timestamped: Boolean)
 
     /**
      * hw and sw parameters for one direction.
@@ -525,6 +572,8 @@ internal class AlsaStream(
         period: Int,
         bufferPeriods: Int,
         queueLimit: Int? = null,
+        /** Capture only: turn on monotonic timestamps for [ClockBridge]; see [AlsaRt.snd_pcm_htimestamp]. */
+        timestamps: Boolean = false,
     ): Granted {
         val api = AlsaLibrary.api
         val hw = PointerByReference()
@@ -564,6 +613,7 @@ internal class AlsaStream(
             }
 
             val availMin = if (queueLimit != null) bufferFrames.value - queueLimit else period.toLong()
+            var stamps = false
             val sw = PointerByReference()
             check(api.snd_pcm_sw_params_malloc(sw) >= 0) { "out of memory" }
             try {
@@ -571,11 +621,17 @@ internal class AlsaStream(
                 // Never start on our own: the loop starts both sides explicitly, after priming.
                 api.snd_pcm_sw_params_set_start_threshold(pcm, sw.value, bufferFrames.value * 2)
                 api.snd_pcm_sw_params_set_avail_min(pcm, sw.value, availMin)
+                // Both or neither: a timestamp on the wall clock compared with System.nanoTime
+                // would be nonsense, so a library that refuses the type gets no stamps at all.
+                stamps = timestamps && runCatching {
+                    api.snd_pcm_sw_params_set_tstamp_mode(pcm, sw.value, AlsaApi.TSTAMP_ENABLE) == 0 &&
+                        api.snd_pcm_sw_params_set_tstamp_type(pcm, sw.value, AlsaApi.TSTAMP_TYPE_MONOTONIC) == 0
+                }.getOrDefault(false)
                 require(api.snd_pcm_sw_params(pcm, sw.value), "refused its software parameters")
             } finally {
                 api.snd_pcm_sw_params_free(sw.value)
             }
-            return Granted(format, channels, availMin)
+            return Granted(format, channels, availMin, stamps)
         } finally {
             api.snd_pcm_hw_params_free(params)
         }
@@ -650,14 +706,18 @@ internal class AlsaStream(
         val grant = LinuxRt.promoteCurrentThread()
         schedulingNote = if (grant.realtime) "realtime: ${grant.detail}" else "realtime ${grant.detail}"
 
+        // The bridge's code is compiled here on a throwaway copy, before the stream starts.
+        bridge?.warmUp(period)
+        bridge?.begin(period)
+
         val c = capture!!
         val p = playback!!
         if (restart(c, p) < 0) {
             lostCode = -5
             return
         }
-        if (reservoir != null) {
-            convertingLoop(c, p, reservoir)
+        if (bridge != null) {
+            bridgedLoop(c, p, bridge)
             return
         }
         while (running) {
@@ -711,11 +771,12 @@ internal class AlsaStream(
     }
 
     /**
-     * The loop when the input is converted. The output's clock drives it: wait until the output is
-     * down to one queued period, take in everything the input has produced meanwhile, hand the
-     * engine one period out of the reservoir, write it.
+     * The loop on two clocks. The output's clock drives it: wait until the output is down to one
+     * queued period, take in everything the input has captured meanwhile, hand the engine one period
+     * out of the bridge, write it.
      */
-    private fun convertingLoop(c: Pointer, p: Pointer, reservoir: CaptureReservoir) {
+    private fun bridgedLoop(c: Pointer, p: Pointer, bridge: ClockBridge) {
+        var counted = 0
         while (running) {
             val room = AlsaRt.snd_pcm_avail(p)
             var failed = if (room < 0) room.toInt() else 0
@@ -725,18 +786,22 @@ internal class AlsaStream(
                 if (w >= 0) continue
                 failed = w
             }
-            if (failed == 0) failed = drainCapture(c, reservoir)
+            if (failed == 0) failed = drainCapture(c, bridge)
             if (failed != 0) {
                 if (!recover(c, p, failed)) return
                 continue
             }
 
             val t0 = System.nanoTime()
-            // A short period while the stream settles is start-up, not a dropout: a USB output
-            // takes several periods in a burst as it starts, before the input has caught up. Measured
-            // on a Razer headset, once or twice per start, never after. The reservoir refills either
-            // way; only the counting waits for [SETTLE_PERIODS], as the other counters do.
-            if (!reservoir.take(inputBlock) && settle >= SETTLE_PERIODS) xruns++
+            bridge.read(inputBlock, period, t0)
+            // A dropout or a cut is heard, so both count — but not while the stream settles: a USB
+            // output takes several periods in a burst as it starts, before the input has caught up.
+            // Measured on a Razer headset, once or twice per start, never after.
+            val events = bridge.underruns + bridge.backlogCuts
+            if (events != counted) {
+                if (settle >= SETTLE_PERIODS) xruns += events - counted
+                counted = events
+            }
             try {
                 callback.render(inputBlock, outputBlock, period)
                 encode()
@@ -746,7 +811,6 @@ internal class AlsaStream(
                 xruns++
             }
             val spent = System.nanoTime() - t0
-            driftCorrections = reservoir.corrections
 
             failed = writePeriod(p)
             if (failed != 0) {
@@ -758,14 +822,26 @@ internal class AlsaStream(
     }
 
     /**
-     * Everything the input has captured since the last look, converted into [reservoir]. Returns 0,
-     * or the ALSA error that stopped it. Bounded: the capture buffer holds at most
+     * Everything the input has captured since the last look, into [bridge] at its own rate. Returns
+     * 0, or the ALSA error that stopped it. Bounded: the capture buffer holds at most
      * [MAX_DRAIN_READS] periods' worth, so a loop that went further would be reading what arrived
      * while it ran.
+     *
+     * Stamped with when the device's position last moved — when the audio was captured — if the PCM
+     * gives timestamps, and with now if not. The loop only looks when the output wakes, so without a
+     * stamp a packet captured several milliseconds ago reads as just arrived, and at an exact ratio of
+     * periods the bridge's level wobbles on the slow beat between the clocks (see `ClockBridgeTest`).
      */
-    private fun drainCapture(c: Pointer, reservoir: CaptureReservoir): Int {
-        val converter = converter!!
+    private fun drainCapture(c: Pointer, bridge: ClockBridge): Int {
         val offset = inputChannel * AlsaApi.bytesPerSample(inFormat)
+        val now = System.nanoTime()
+        var landed = now
+        if (stamped && AlsaRt.snd_pcm_htimestamp(c, stampAddress, stampAddress + 8) == 0) {
+            val m = stampMemory!!
+            val at = m.getLong(8) * 1_000_000_000L + m.getLong(16)
+            // A stamp from the future, or older than a second, is a plugin that does not keep them.
+            if (at in (now - 1_000_000_000L)..now) landed = at
+        }
         for (pass in 0 until MAX_DRAIN_READS) {
             val avail = AlsaRt.snd_pcm_avail(c)
             if (avail < 0) return avail.toInt()
@@ -776,7 +852,7 @@ internal class AlsaStream(
             if (r < 0) return r.toInt()
             val n = r.toInt()
             AlsaCodec.decode(inBytes, inFormat, inFrameBytes, offset, rawInput, n)
-            reservoir.push(convertedInput, converter.process(rawInput, n, convertedInput))
+            bridge.write(rawInput, n, landed)
         }
         return 0
     }
@@ -833,9 +909,8 @@ internal class AlsaStream(
 
     /** Drop, prepare, prime with silence, start. Used for the first start and after every xrun. */
     private fun restart(c: Pointer, p: Pointer): Int {
-        // Whatever was waiting belongs to the stream that just broke; start clean.
-        reservoir?.reset()
-        converter?.reset()
+        // Whatever was waiting belongs to the stream that just broke; start clean. The bridge needs
+        // nothing: it finds itself short, refills to its target, and fades back in.
         AlsaRt.snd_pcm_drop(c)
         if (!linked) AlsaRt.snd_pcm_drop(p)
         var e = AlsaRt.snd_pcm_prepare(c)

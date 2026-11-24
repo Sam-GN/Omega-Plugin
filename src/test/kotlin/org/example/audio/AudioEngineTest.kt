@@ -208,10 +208,9 @@ class AudioEngineTest {
         val output = FloatArray(256)
         repeat(2_000) { engine.render(input, output, 256) }   // warm up and let C2 settle
 
-        val before = allocatedBytes()
-        if (before < 0) return                                // not a HotSpot JVM; nothing to assert
+        val before = org.example.Allocation.currentThreadBytes()
         repeat(20_000) { engine.render(input, output, 256) }
-        val allocated = allocatedBytes() - before
+        val allocated = org.example.Allocation.currentThreadBytes() - before
         assertTrue(
             allocated < 64 * 1024,
             "render() allocated $allocated bytes over 20 000 blocks; the callback path must not allocate",
@@ -317,10 +316,9 @@ class AudioEngineTest {
         val output = FloatArray(256)
         repeat(2_000) { engine.render(input, output, 256) }
 
-        val before = allocatedBytes()
-        if (before < 0) return
+        val before = org.example.Allocation.currentThreadBytes()
         repeat(20_000) { engine.render(input, output, 256) }
-        val allocated = allocatedBytes() - before
+        val allocated = org.example.Allocation.currentThreadBytes() - before
         assertTrue(
             allocated < 64 * 1024,
             "render() allocated $allocated bytes over 20 000 split blocks; the callback path must not allocate",
@@ -379,10 +377,9 @@ class AudioEngineTest {
         repeat(2_000) { engine.render(input, output, 256) }
         assertTrue(looper.lanes[3].recording, "the fourth lane should be recording throughout")
 
-        val before = allocatedBytes()
-        if (before < 0) return
+        val before = org.example.Allocation.currentThreadBytes()
         repeat(20_000) { engine.render(input, output, 256) }
-        val allocated = allocatedBytes() - before
+        val allocated = org.example.Allocation.currentThreadBytes() - before
         assertTrue(
             allocated < 64 * 1024,
             "render() allocated $allocated bytes over 20 000 loop blocks; the callback path must not allocate",
@@ -398,14 +395,22 @@ class AudioEngineTest {
         val output = FloatArray(256)
         repeat(2_000) { engine.render(input, output, 256) }
 
-        val before = allocatedBytes()
-        if (before < 0) return
+        val before = org.example.Allocation.currentThreadBytes()
         repeat(20_000) { engine.render(input, output, 256) }
-        val allocated = allocatedBytes() - before
+        val allocated = org.example.Allocation.currentThreadBytes() - before
         assertTrue(
             allocated < 64 * 1024,
             "render() allocated $allocated bytes over 20 000 blocks with the tuner on; the callback path must not allocate",
         )
+        // The pitch needs a sine whose phase carries on from block to block. The array above restarts
+        // every 256 samples, which repeats at 44 100 / 256 = 172 Hz and is loudest at its second
+        // harmonic, 344.5 Hz, which is what the tuner rightly read of it. Until 2.3.0 this line was
+        // never reached: the allocation check above returned early on a counter that failed to read.
+        var phase = 0.0
+        repeat(100) {
+            for (i in input.indices) { input[i] = kotlin.math.sin(phase).toFloat(); phase += 0.05 }
+            engine.render(input, output, 256)
+        }
         val reading = assertNotNull(engine.tuner.read(), "the ring was fed the dry input")
         assertEquals(351f, reading.hz, 1f)
         assertEquals(1.5f * input[100], output[100], 1e-6f, "the tuner changes nothing about the sound")
@@ -417,15 +422,6 @@ class AudioEngineTest {
         post = EffectChain(listOf(Gainer(0.5f))),
         looper = looper,
     )
-
-    private fun allocatedBytes(): Long = try {
-        val bean = java.lang.management.ManagementFactory.getThreadMXBean()
-        val method = bean.javaClass.getMethod("getCurrentThreadAllocatedBytes")
-        method.isAccessible = true
-        method.invoke(bean) as Long
-    } catch (_: Throwable) {
-        -1L
-    }
 
     // ---- helpers ------------------------------------------------------------
 

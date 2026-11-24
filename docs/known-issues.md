@@ -82,6 +82,13 @@ about it came from one Manjaro laptop's built-in HDA card. Specifically:
   same pair of devices, so the limit is believed to be the hardware's. 256 frames runs clean.
 - **The window has been started, not looked at** — not at the Steam Deck's 1280×800, not under
   fractional scaling, and the file dialogs have not been opened. See `linux-compat.md` F7 and F8.
+- **ALSA's clock bridge (2.3.0) has not run on Linux at all.** Written and simulated on Windows:
+  a converted input, two cards, and a card against `default` now go through the `ClockBridge`
+  instead of the splicing reservoir, or, for two cards at one rate, instead of nothing. To check
+  on a Linux machine: the log's `Stream health` line should say `capture timestamps on`; drift
+  should settle within tens of ppm and stay there; one card both ways should still say nothing
+  about a bridge, since it keeps the lockstep. If `capture timestamps off`, the drift reading
+  wobbles but must not drop out.
 
 The degradation path was exercised on Linux against 1.1.0-beta (JNA off the classpath: Java Sound
 streams, both native backends explain themselves). It found and fixed a crash in `--list-backends`;
@@ -247,8 +254,9 @@ primed, the render loop read what the ring held at each wake, so it primed at th
 found a wake's worth and started 2 ms over instead of a packet and the margin. Each underrun then
 read the ring to empty, which repeated the shortfall on the next low wake of the 2-2-1 packet
 pattern and threw away the frames held back since. Only drift between the clocks ended it.
-`LowPointRegulator.read` now holds the ring until it reaches its start level and keeps a packet and
-the margin back on an underrun. Measured, `--selftest --stress`, 30 s each: Synido into Buds3 at
+`LowPointRegulator.read` then held the ring until it reached its start level and kept a packet and
+the margin back on an underrun. (2.3.0 replaced the regulator with `ClockBridge`, which resamples
+rather than splicing; see CHANGELOG.) Measured, `--selftest --stress`, 30 s each: Synido into Buds3 at
 264 frames, 26 dropouts on 2.2.3 and 0, 0 on 2.2.4; the virtual cable into an ESS SABRE on the
 short period with the full chain, 8 and 13 on 2.2.3 and 3 on 2.2.4.
 

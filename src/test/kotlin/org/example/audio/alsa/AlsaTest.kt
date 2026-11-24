@@ -145,6 +145,21 @@ class AlsaTest {
         assertFalse(order.isEmpty())
     }
 
+    /**
+     * Which pairs go through the clock bridge (2.3.0): two clocks do, one does not. Devices on one
+     * card share its crystal; `default` both ways is one sound server; a card against the server is
+     * two clocks, as are two cards.
+     */
+    @Test
+    fun `a pair on one clock keeps the lockstep and a pair on two is bridged`() {
+        assertEquals(clockOf("hw:CARD=PCH,DEV=0"), clockOf("hw:CARD=PCH,DEV=3"))
+        assertEquals(clockOf("default"), clockOf("default"))
+        assertTrue(clockOf("hw:CARD=PCH,DEV=0") != clockOf("hw:CARD=Pocket,DEV=0"))
+        assertTrue(clockOf("hw:CARD=PCH,DEV=0") != clockOf("default"))
+        assertEquals(clockOf("hw:1,0"), clockOf("hw:1,2"))
+        assertTrue(clockOf("hw:1,0") != clockOf("hw:2,0"))
+    }
+
     private fun buffer(size: Int): ByteBuffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
     private fun bytes(b: ByteBuffer, n: Int) = (0 until n).map { b.get(it).toInt() and 0xFF }
 }

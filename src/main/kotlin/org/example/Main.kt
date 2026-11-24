@@ -929,6 +929,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     // the playback queue, which has not settled yet one block after start().
     val finalFormat = engine.format
     val scheduling = engine.schedulingNote
+    val health = engine.healthNote
     stressing.set(false)
     engine.stop()
 
@@ -952,6 +953,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     println(String.format("device xruns    : %d (%.2f/s)", xruns, xruns / elapsed))
     println(String.format("worst callback  : %.2f ms against a %.2f ms period", worst, frames * 1000f / rate))
     scheduling?.let { println("scheduling      : $it") }
+    health?.let { println("stream detail   : $it") }
     fault?.let { println("DSP fault       : $it") }
 
     if (probe != null) {

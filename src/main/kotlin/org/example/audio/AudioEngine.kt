@@ -247,6 +247,9 @@ class AudioEngine(
     /** See [AudioStream.schedulingNote]. Null on Windows, where there is nothing new to say. */
     val schedulingNote: String? get() = stream?.schedulingNote
 
+    /** See [AudioStream.healthNote]. */
+    val healthNote: String? get() = stream?.healthNote
+
     val backendId: BackendId? get() = backend?.id
 
     /**

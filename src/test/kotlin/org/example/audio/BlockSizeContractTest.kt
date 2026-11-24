@@ -73,10 +73,9 @@ class BlockSizeContractTest {
             val input = FloatArray(970) { kotlin.math.sin(it * 0.05).toFloat() }
             val output = FloatArray(970)
             repeat(2_000) { engine.render(input, output, 970) }
-            val before = allocatedBytes()
-            if (before < 0) return
+            val before = org.example.Allocation.currentThreadBytes()
             repeat(20_000) { engine.render(input, output, 970) }
-            val allocated = allocatedBytes() - before
+            val allocated = org.example.Allocation.currentThreadBytes() - before
             assertTrue(allocated < 64 * 1024, "render() allocated $allocated bytes splitting 20 000 oversized blocks")
         } finally {
             engine.stop()
@@ -194,14 +193,5 @@ class BlockSizeContractTest {
                 override fun close() {}
             }
         }
-    }
-
-    private fun allocatedBytes(): Long = try {
-        val bean = java.lang.management.ManagementFactory.getThreadMXBean()
-        val method = bean.javaClass.getMethod("getCurrentThreadAllocatedBytes")
-        method.isAccessible = true
-        method.invoke(bean) as Long
-    } catch (_: Throwable) {
-        -1L
     }
 }
