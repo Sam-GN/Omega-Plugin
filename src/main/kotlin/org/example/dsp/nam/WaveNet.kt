@@ -66,12 +66,17 @@ class HeadConfig(
 )
 
 /**
- * WaveNet inference, sample by sample.
+ * WaveNet inference, a block at a time.
  *
  * This is Neural Amp Modeler's architecture reimplemented rather than wrapped — the reference is
- * C++ and there is no binding for it here. It is written per-sample instead of the reference's
- * block-at-a-time matrix form: the maths is identical, the buffer bookkeeping is far simpler, and
- * simpler is what makes it checkable when there is no reference implementation to diff against.
+ * C++ and there is no binding for it here. Until 2.3.2 it ran sample by sample, which is the form
+ * that can be checked by reading, and took half of every period on a full capture: the inner loops
+ * were sums of eight products, which the JIT may not vectorise because that reorders the additions.
+ * Here each stage runs over up to [BLOCK] frames before the next, so every inner loop is over time,
+ * adds in the same order per sample, and vectorises. **The output is the same to the bit**, held to
+ * the old code, which lives on in the tests as `ReferenceWaveNet`.
+ *
+ * Signals are channel-major: channel `c`, frame `j` is at `c * BLOCK + j`.
  *
  * **Weight order is the whole game.** A `.nam` file is one flat array of floats, and getting the
  * unpacking order wrong does not fail — it produces a model that runs and sounds like nothing in
@@ -101,36 +106,40 @@ class WaveNet(
     val operationsPerSample: Int =
         arrays.sumOf { it.operationsPerSample } + (netHead?.operationsPerSample ?: 0)
 
-    /** Scratch for the one-channel input to the first array. */
-    private val single = FloatArray(arrays[0].inputSize)
+    /** The one-channel input to the first array, and the condition every layer mixes in. */
+    private val single = FloatArray(BLOCK)
 
     /** Head output after [headScale], only needed when a network head follows it. */
-    private val scaled = FloatArray(arrays[arrays.size - 1].headChannels)
+    private val scaled = FloatArray(arrays[arrays.size - 1].headChannels * BLOCK)
 
     fun process(buffer: FloatArray, count: Int) {
+        var at = 0
+        while (at < count) {
+            val n = minOf(BLOCK, count - at)
+            processBlock(buffer, at, n)
+            at += n
+        }
+    }
+
+    private fun processBlock(buffer: FloatArray, at: Int, n: Int) {
+        System.arraycopy(buffer, at, single, 0, n)
         val stack = arrays
-        val head = netHead
+        var signal = single
+        var accumulated: FloatArray? = null
+        for (a in stack.indices) {
+            val array = stack[a]
+            array.process(signal, single, accumulated, n)
+            signal = array.signalOut
+            accumulated = array.headOut
+        }
+        val out = accumulated!!
         val scale = headScale
-        for (i in 0 until count) {
-            val x = buffer[i]
-            single[0] = x
-
-            var signal = single
-            var accumulated: FloatArray? = null
-            for (a in stack.indices) {
-                val array = stack[a]
-                array.process(signal, x, accumulated)
-                signal = array.signalOut
-                accumulated = array.headOut
-            }
-
-            val out = accumulated!!
-            buffer[i] = if (head == null) {
-                scale * out[0]
-            } else {
-                for (c in out.indices) scaled[c] = scale * out[c]
-                head.apply(scaled)[0]
-            }
+        val head = netHead
+        if (head == null) {
+            for (j in 0 until n) buffer[at + j] = scale * out[j]
+        } else {
+            for (i in out.indices) scaled[i] = scale * out[i]
+            System.arraycopy(head.apply(scaled, n), 0, buffer, at, n)
         }
     }
 
@@ -140,6 +149,9 @@ class WaveNet(
     }
 
     companion object {
+
+        /** Frames a stage runs before the next. Long enough to vectorise, short enough for L1. */
+        const val BLOCK = 128
 
         /**
          * How many weights an architecture requires, including the trailing `head_scale`.
@@ -292,28 +304,28 @@ class LayerArray(config: LayerArrayConfig, unpacker: Unpacker) {
         headWidth, config.headChannels, config.headKernelSize, 1, config.headBias, unpacker,
     )
 
-    /** Residual output, reused each sample so the audio path allocates nothing. */
-    val signalOut = FloatArray(config.channels)
+    /** Residual output, reused each block so the audio path allocates nothing. */
+    val signalOut = FloatArray(config.channels * WaveNet.BLOCK)
 
     /** Head output, likewise. */
-    val headOut = FloatArray(config.headChannels)
+    val headOut = FloatArray(config.headChannels * WaveNet.BLOCK)
 
-    private val accumulator = FloatArray(headWidth)
+    private val accumulator = FloatArray(headWidth * WaveNet.BLOCK)
 
     val operationsPerSample: Int =
         rechannel.operations + layers.sumOf { it.operations } + headRechannel.operations
 
-    fun process(input: FloatArray, condition: Float, incoming: FloatArray?) {
-        rechannel.apply(input, signalOut)
+    fun process(input: FloatArray, condition: FloatArray, incoming: FloatArray?, n: Int) {
+        rechannel.apply(input, signalOut, n)
 
         // The first array starts the head at zero; a later one continues the previous array's.
         if (incoming == null) Arrays.fill(accumulator, 0f)
-        else System.arraycopy(incoming, 0, accumulator, 0, headWidth)
+        else System.arraycopy(incoming, 0, accumulator, 0, accumulator.size)
 
         val stack = layers
-        for (i in stack.indices) stack[i].process(signalOut, condition, accumulator)
+        for (i in stack.indices) stack[i].process(signalOut, condition, accumulator, n)
 
-        headRechannel.apply(accumulator, headOut)
+        headRechannel.apply(accumulator, headOut, n)
     }
 
     fun reset() {
@@ -354,50 +366,55 @@ class Layer(config: LayerArrayConfig, index: Int, unpacker: Unpacker) {
             null
         }
 
-    private val z = FloatArray(mid)
-    private val mixed = FloatArray(mid)
-    private val post = FloatArray(bottleneck)
-    private val conditionBuffer = FloatArray(config.conditionSize)
-    private val residual = FloatArray(channels)
-    private val headTerm = FloatArray(if (config.head1x1) config.head1x1Channels else 0)
+    private val z = FloatArray(mid * WaveNet.BLOCK)
+    private val mixed = FloatArray(mid * WaveNet.BLOCK)
+    private val post = FloatArray(bottleneck * WaveNet.BLOCK)
+    private val residual = FloatArray(channels * WaveNet.BLOCK)
+    private val headTerm = FloatArray(if (config.head1x1) config.head1x1Channels * WaveNet.BLOCK else 0)
 
     val operations: Int =
         conv.operations + mixin.operations + (oneByOne?.operations ?: 0) +
             (headOneByOne?.operations ?: 0)
 
-    fun process(signal: FloatArray, conditionValue: Float, accumulator: FloatArray) {
-        conv.apply(signal, z)
+    fun process(signal: FloatArray, condition: FloatArray, accumulator: FloatArray, n: Int) {
+        conv.apply(signal, z, n)
+        mixin.apply(condition, mixed, n)
+        addInto(z, mixed, mid, n)
 
-        conditionBuffer[0] = conditionValue
-        mixin.apply(conditionBuffer, mixed)
-        for (i in z.indices) z[i] += mixed[i]
-
-        when (gating) {
-            Gating.NONE -> for (i in 0 until bottleneck) post[i] = primary.apply(z[i])
-            Gating.MULTIPLY -> for (i in 0 until bottleneck) {
-                post[i] = primary.apply(z[i]) * secondary.apply(z[i + bottleneck])
+        for (b in 0 until bottleneck) {
+            val at = b * WaveNet.BLOCK
+            if (gating == Gating.NONE) {
+                primary.apply(z, at, post, at, n)
+                continue
             }
-            else -> for (i in 0 until bottleneck) {
-                val blend = secondary.apply(z[i + bottleneck])
-                post[i] = blend * primary.apply(z[i]) + (1f - blend) * z[i]
+            val gate = (b + bottleneck) * WaveNet.BLOCK
+            for (j in 0 until n) {
+                val v = z[at + j]
+                val g = secondary.apply(z[gate + j])
+                post[at + j] = if (gating == Gating.MULTIPLY) primary.apply(v) * g
+                else g * primary.apply(v) + (1f - g) * v
             }
         }
 
         val toHead = headOneByOne
         if (toHead == null) {
-            for (i in 0 until bottleneck) accumulator[i] += post[i]
+            addInto(accumulator, post, bottleneck, n)
         } else {
-            toHead.apply(post, headTerm)
-            for (i in headTerm.indices) accumulator[i] += headTerm[i]
+            toHead.apply(post, headTerm, n)
+            addInto(accumulator, headTerm, headTerm.size / WaveNet.BLOCK, n)
         }
 
         val toResidual = oneByOne
         if (toResidual == null) {
-            for (i in 0 until channels) signal[i] += post[i]
+            addInto(signal, post, channels, n)
         } else {
-            toResidual.apply(post, residual)
-            for (i in 0 until channels) signal[i] += residual[i]
+            toResidual.apply(post, residual, n)
+            addInto(signal, residual, channels, n)
         }
+    }
+
+    private fun addInto(to: FloatArray, from: FloatArray, width: Int, n: Int) {
+        for (c in 0 until width) Kernel.add(to, from, c * WaveNet.BLOCK, n)
     }
 
     fun reset() = conv.reset()
@@ -427,18 +444,22 @@ class NetHead(inChannels: Int, config: HeadConfig, unpacker: Unpacker) {
         convs = Array(count) { i ->
             DilatedConv(widths[i], widths[i + 1], config.kernelSizes[i], 1, true, unpacker)
         }
-        activated = Array(count) { i -> FloatArray(widths[i]) }
-        outputs = Array(count) { i -> FloatArray(widths[i + 1]) }
+        activated = Array(count) { i -> FloatArray(widths[i] * WaveNet.BLOCK) }
+        outputs = Array(count) { i -> FloatArray(widths[i + 1] * WaveNet.BLOCK) }
     }
 
     val operationsPerSample: Int = convs.sumOf { it.operations }
 
-    fun apply(input: FloatArray): FloatArray {
+    fun apply(input: FloatArray, n: Int): FloatArray {
         var current = input
         for (i in convs.indices) {
             val scratch = activated[i]
-            for (c in scratch.indices) scratch[c] = activation.apply(current[c])
-            convs[i].apply(scratch, outputs[i])
+            var at = 0
+            while (at < scratch.size) {
+                activation.apply(current, at, scratch, at, n)
+                at += WaveNet.BLOCK
+            }
+            convs[i].apply(scratch, outputs[i], n)
             current = outputs[i]
         }
         return current
@@ -449,12 +470,57 @@ class NetHead(inChannels: Int, config: HeadConfig, unpacker: Unpacker) {
     }
 }
 
+/** The loops everything above spends its time in: over frames, so the JIT vectorises them. */
+internal object Kernel {
+
+    /** `y += a * x` over [n] frames. */
+    fun axpy(y: FloatArray, yAt: Int, x: FloatArray, xAt: Int, a: Float, n: Int) {
+        for (j in 0 until n) y[yAt + j] += a * x[xAt + j]
+    }
+
+    /** Four of them in one pass, left to right, so the sums come out the same to the bit. */
+    fun axpy4(
+        y: FloatArray, yAt: Int, x: FloatArray, x0: Int, x1: Int, x2: Int, x3: Int,
+        a0: Float, a1: Float, a2: Float, a3: Float, n: Int,
+    ) {
+        for (j in 0 until n) {
+            y[yAt + j] = y[yAt + j] + a0 * x[x0 + j] + a1 * x[x1 + j] + a2 * x[x2 + j] + a3 * x[x3 + j]
+        }
+    }
+
+    fun add(to: FloatArray, from: FloatArray, at: Int, n: Int) {
+        for (j in 0 until n) to[at + j] += from[at + j]
+    }
+
+    /** One output channel: each of [width] inputs, [stride] apart from [xAt], by its weight. */
+    fun row(
+        y: FloatArray, yAt: Int, x: FloatArray, xAt: Int, stride: Int,
+        weight: FloatArray, weightAt: Int, width: Int, n: Int,
+    ) {
+        var i = 0
+        while (i + 4 <= width) {
+            val x0 = xAt + i * stride
+            val w = weightAt + i
+            axpy4(
+                y, yAt, x, x0, x0 + stride, x0 + 2 * stride, x0 + 3 * stride,
+                weight[w], weight[w + 1], weight[w + 2], weight[w + 3], n,
+            )
+            i += 4
+        }
+        while (i < width) {
+            axpy(y, yAt, x, xAt + i * stride, weight[weightAt + i], n)
+            i++
+        }
+    }
+}
+
 /**
- * Dilated causal convolution over a ring of past inputs.
+ * Dilated causal convolution over a window of past inputs.
  *
- * Taps sit at offsets `-(k-1)*d … -d, 0`, so the ring only has to be as long as the furthest tap
- * plus one. Weights arrive as `[out][in][k]` — PyTorch's flattening order — and are stored as
- * `[k][out][in]` so the innermost loop walks memory in order.
+ * Taps sit at offsets `-(k-1)*d … -d, 0`. Each channel's past is contiguous, so a tap is a plain
+ * slice of it; new input is appended, and when a channel's room is used up the part still needed is
+ * moved back to the start. Weights arrive as `[out][in][k]` — PyTorch's flattening order — and are
+ * stored as `[k][out][in]` so a row of inputs is contiguous.
  */
 class DilatedConv(
     private val inChannels: Int,
@@ -468,9 +534,12 @@ class DilatedConv(
     private val weight = FloatArray(kernelSize * outChannels * inChannels)
     private val bias = FloatArray(outChannels)
 
-    private val historyLength = dilation * (kernelSize - 1) + 1
-    private val history = FloatArray(historyLength * inChannels)
-    private var write = 0
+    private val past = dilation * (kernelSize - 1)
+
+    // Room to append before moving: as much again, so moving costs no more than writing did.
+    private val span = past + maxOf(past, 2 * WaveNet.BLOCK) + WaveNet.BLOCK
+    private val history = FloatArray(span * inChannels)
+    private var write = past
 
     val operations: Int = kernelSize * outChannels * inChannels
 
@@ -485,33 +554,31 @@ class DilatedConv(
         if (hasBias) for (out in 0 until outChannels) bias[out] = unpacker.next()
     }
 
-    fun apply(input: FloatArray, output: FloatArray) {
-        val base = write * inChannels
-        for (c in 0 until inChannels) history[base + c] = input[c]
+    fun apply(input: FloatArray, output: FloatArray, n: Int) {
+        if (write + n > span) {
+            for (c in 0 until inChannels) System.arraycopy(history, c * span + write - past, history, c * span, past)
+            write = past
+        }
+        for (c in 0 until inChannels) System.arraycopy(input, c * WaveNet.BLOCK, history, c * span + write, n)
 
-        for (out in 0 until outChannels) output[out] = bias[out]
-
-        for (k in 0 until kernelSize) {
-            // Tap k reads (kernelSize - 1 - k) * dilation samples back.
-            var slot = write - (kernelSize - 1 - k) * dilation
-            if (slot < 0) slot += historyLength
-            val historyBase = slot * inChannels
-            val weightBase = k * outChannels * inChannels
-            for (out in 0 until outChannels) {
-                var sum = output[out]
-                val row = weightBase + out * inChannels
-                for (into in 0 until inChannels) sum += weight[row + into] * history[historyBase + into]
-                output[out] = sum
+        for (out in 0 until outChannels) {
+            val at = out * WaveNet.BLOCK
+            Arrays.fill(output, at, at + n, bias[out])
+            for (k in 0 until kernelSize) {
+                // Tap k reads (kernelSize - 1 - k) * dilation samples back.
+                val from = write - (kernelSize - 1 - k) * dilation
+                Kernel.row(
+                    output, at, history, from, span,
+                    weight, (k * outChannels + out) * inChannels, inChannels, n,
+                )
             }
         }
-
-        write++
-        if (write >= historyLength) write = 0
+        write += n
     }
 
     fun reset() {
         history.fill(0f)
-        write = 0
+        write = past
     }
 }
 
@@ -533,12 +600,11 @@ class Conv1x1(
         if (bias) for (i in offset.indices) offset[i] = unpacker.next()
     }
 
-    fun apply(input: FloatArray, output: FloatArray) {
+    fun apply(input: FloatArray, output: FloatArray, n: Int) {
         for (out in 0 until outChannels) {
-            var sum = offset[out]
-            val row = out * inChannels
-            for (into in 0 until inChannels) sum += weight[row + into] * input[into]
-            output[out] = sum
+            val at = out * WaveNet.BLOCK
+            Arrays.fill(output, at, at + n, offset[out])
+            Kernel.row(output, at, input, 0, WaveNet.BLOCK, weight, out * inChannels, inChannels, n)
         }
     }
 }

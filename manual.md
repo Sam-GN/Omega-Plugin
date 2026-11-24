@@ -191,8 +191,9 @@ Every WASAPI mode, and ASIO hybrid, follows that drift by resampling the input b
 million, which you cannot hear, and keeps enough of it in hand to ride out a USB input's uneven
 timing. It remembers the worst lateness it has seen and gives back delay only after a quiet minute,
 never below that, so a late packet that dropped out once does not drop out again. On Linux, ALSA
-with two cards can still drop out at the smallest buffer sizes; if it does, use a larger BUFFER or
-the same card both ways.
+follows the drift too. Where the input is converted (a C beside the rate) at 512 frames or more it
+does so by adding or leaving out single samples, so prefer 256 there. Two devices can still drop out
+at the smallest buffer sizes; if they do, use a larger BUFFER or the same card both ways.
 
 ### RATE
 
@@ -952,8 +953,11 @@ plugged in after the program started; restart the program. Under ASIO, make sure
 has the interface open.
 
 **Two different devices in and out drop out at small buffers.** Each has its own clock and they drift
-apart. On Windows every WASAPI mode and ASIO hybrid follow the drift themselves; on Linux's ALSA, use
-a bigger buffer or the same card both ways.
+apart. Every WASAPI mode, ASIO hybrid and Linux's ALSA follow the drift themselves; if it still drops
+out, use a bigger buffer or the same card both ways.
+
+**On Linux there was no sound at 44.1 kHz with `Default` as the output.** Fixed in 2.3.1. A stream
+that stops moving now says so: press Start again, and if it repeats choose another RATE or BUFFER.
 
 **WASAPI exclusive refuses a device, or stops with a message about its event timing.** Some drivers
 cannot run in exclusive mode at all; HDMI outputs on some graphics cards are known for it. The program

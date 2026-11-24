@@ -9,6 +9,66 @@ unverified, it says so.
 
 ---
 
+## [2.3.2-beta] — 2026-11-24
+
+### Changed — a NAM capture costs half of what it did
+
+NAM ran sample by sample, in loops the JVM may not vectorise. It now runs a block at a time, and the
+sound is the same to the last bit: tests hold it to the old code over every shape of file it reads. On
+one laptop, three full-size captures, 256 frames at 44.1 kHz, run offline: 2.6 to 3.0 ms a block
+before, 1.2 to 1.5 ms now. Paced the way a stream paces it the median is 2.5 ms, because the laptop's
+CPU drops its clock to suit the lighter load, but blocks that overran their period fell from 11–14 to
+0–4 in 4 000. Not yet measured in a stream. It is the same code on Windows.
+
+### Added — on Linux's ALSA, the log says what each dropout was
+
+Dropouts were heard that nothing counted. The log now has a `Dropout watch` line when a period takes
+longer than it lasts, saying whether the pedals were slow or something else had the CPU, and when the
+output is found with nothing left to play. The stream-health line carries the totals, the least audio
+ever left queued and the longest gap. A gap inside the sound server still cannot be seen.
+
+`docs/zero-dropouts.md` holds the measurements behind this and the rest of the plan.
+
+---
+
+## [2.3.1-beta] — 2026-11-24
+
+Linux's ALSA only; no other driver path changed. The new 44.1 kHz path has run in simulation and unit
+tests, **not yet on hardware**.
+
+### Fixed — on Linux, ALSA at the input's own rate into another device was silent
+
+2.3.0 moved a same-rate pair on two clocks onto a loop driven by the output. A Pocket Master at
+44.1 kHz into PipeWire's `Default` then played nothing at 128 to 1024 frames and dropped out 413
+times in six seconds at 64. The loop waited for the output to be down to one period, 256 frames, and
+PipeWire, converting to its 48 kHz graph, stopped taking audio with 291 queued. Why it stops there
+is not known. Such a pair is paced by the input again, as in 2.2.4, which ran clean.
+
+### Changed — that pair follows the drift, without the added latency
+
+2.2.4's loop had no drift correction, so delay could build up or run out. What is written is now
+resampled by a few parts per million to keep the audio in hand at the level it started with. No
+sample is deleted or repeated, and no cushion is added: 0.7 ms, so 18.1 ms calculated at 256 frames
+and 44.1 kHz, where 2.2.4 reported 17.4 ms and 2.3.0 23.6 ms. In simulation the delay ends within
+1 ms of where it started, clocks 100 ppm apart either way, 64 to 1024 frames. That assumes the
+server reports its delay smoothly. If it moves in lumps the delay wanders within one lump, 5.8 ms,
+rather than building up, and a dropout is possible.
+
+### Fixed — a converted ALSA input dropped out at large buffers
+
+At 1024 frames and 48 kHz, 2.3.0 cut or dropped out 78 times in thirty seconds. From 512 frames up a
+converted input uses the 2.2.4 join again: no dropouts at 512 or 1024 in thirty seconds, at the cost
+of 30 and 16 single-sample splices a second. Below 512 the bridge stays; over two minutes at 256
+under stress it had no splices and no dropouts, where 2.2.4 had 5 447 and one.
+
+### Fixed — a stream that stopped moving read as perfect
+
+An ALSA stream that never got going reported a realtime ratio of 1.0000, and `--selftest` passed it.
+It now reads 0, and one that writes nothing for two seconds is stopped with an explanation.
+`--selftest` fails whenever the stream reports an error.
+
+---
+
 ## [2.3.0-beta] — 2026-11-23
 
 ### Fixed — WASAPI hybrid crackled and dropped out between two devices

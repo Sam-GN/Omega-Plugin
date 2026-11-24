@@ -61,6 +61,25 @@ class Activation private constructor(
         else -> x
     }
 
+    /**
+     * [n] frames of it, the `when` outside the loop. The rectifiers are written with `max` and `min`,
+     * which vectorise and do not branch on the signal's sign; the rest go one at a time.
+     */
+    fun apply(from: FloatArray, fromAt: Int, to: FloatArray, toAt: Int, n: Int) {
+        when (kind) {
+            LEAKY_RELU -> {
+                val slope = p0
+                for (j in 0 until n) {
+                    val x = from[fromAt + j]
+                    to[toAt + j] = Math.max(x, 0f) + slope * Math.min(x, 0f)
+                }
+            }
+            RELU -> for (j in 0 until n) to[toAt + j] = Math.max(from[fromAt + j], 0f)
+            IDENTITY -> System.arraycopy(from, fromAt, to, toAt, n)
+            else -> for (j in 0 until n) to[toAt + j] = apply(from[fromAt + j])
+        }
+    }
+
     companion object {
         private const val TANH = 0
         private const val RELU = 1

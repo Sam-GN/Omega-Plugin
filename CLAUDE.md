@@ -51,6 +51,7 @@ be confused with each other:
 | `docs/virtual-io.md` | Routing Omega into and out of other applications. |
 | `docs/WhatsDone.md` | What has been finished, against the original requirements. |
 | `docs/update-check.md` | The plan Check for updates was built from, in 1.8.0. History now: its header lists where the build departed from it. The rules it produced are under "Check for updates" below. |
+| `docs/zero-dropouts.md` | **The dropout work**, items `Z1`–`Z7`: what was measured on one Linux laptop and the plan from it. Its §0 is the current status. |
 | `docs/mac-impl.md` | **The macOS work plan**, items `M1`–`M9` and tests `T1`–`T13`, written 2026-11-02 before anything had run on a Mac. Its §0 is the current status and overrides the plan text below it. Apple Silicon only, unsigned by decision, a zipped `.app` that replaces itself the way the AppImage does. |
 | `docs/theme-optional.md`, `docs/profile-optional.md`, `docs/pickup-optional.md`, `docs/instrument-sampler.md` | **Proposals for things nobody has promised.** Written to review later. Do not treat as commitments or as a backlog. The last is the instrument sampler — a captured note played chromatically from a keyboard, and the guitar as its controller. |
 
@@ -162,8 +163,8 @@ check — see "Check for updates" below. The three:
     single samples and mistook a USB input's lateness for drift: 12 565 splices and 20 dropouts in
     88 s on a Pocket Master into a Cirrus output. `ClockBridgeTest` drives it with simulated clocks
     and **measures the sound** — a 1 kHz tone's broadband noise, 107 dB down where splicing gave 28
-    — and a test that the measure fails the old behaviour. ALSA's two-clock pairs use the bridge
-    too (see `audio/alsa/` below); Java Sound is measured separately (see "Java Sound only"). Since 2.2.1 exclusive also
+    — and a test that the measure fails the old behaviour. ALSA's converted input uses the bridge
+    too, below 512 frames (see `audio/alsa/` below); Java Sound is measured separately (see "Java Sound only"). Since 2.2.1 exclusive also
     **reports** that hidden delay: the render thread reads `IAudioClock` 32 times after 100 settled
     wakes (preallocated, before the period is written), and `WasapiStream.format` adds the median
     excess over the reported output latency as `StreamFormat.hiddenOutputLatencyFrames`. The window
@@ -191,15 +192,20 @@ check — see "Check for updates" below. The three:
   - `audio/alsa/` — Linux's always-present rung: `Default` through the sound server, or `hw:`
     straight to a card. Capture and playback are separate `BackendDevice`s (`in:`/`out:` ids),
     because `capabilities()` must know which direction it is answering for. The thread is ours.
-    A pair on one clock — one card, or `default` both ways (`clockOf`) — runs in lockstep (read a
-    period, render, write). A pair on two clocks — a converted rate, two cards, or a card against
-    the server — runs `bridgedLoop`, driven by the output, with the input going into a
-    `ClockBridge` stamped by `snd_pcm_htimestamp` on CLOCK_MONOTONIC, the clock `System.nanoTime`
-    reads (2.3.0). Before, a converted input spliced a frame per drift correction in
-    `CaptureReservoir`, and a same-rate pair on two cards had no correction at all and ran until
-    one side broke. **Untested on hardware so far**: simulated in `ClockBridgeTest` at ALSA's
-    period choices, with and without stamps — without, an exact 2:1 of periods makes the level
-    wobble on the clocks' slow beat (+22 ppm read against a true -100), never a dropout.
+    `joinFor` picks the join, each from a measurement (2.3.1). One clock — one card, or `default` both
+    ways (`clockOf`) — runs in lockstep (read a period, render, write). **Two clocks at one rate**
+    keep that loop, paced by the input, with `DriftFollower` resampling what is *written* by a few ppm
+    to hold the audio in hand at its starting level: 32 frames, no cushion. **Never drive that pair
+    from the output**: 2.3.0 did, and PipeWire at 44.1 kHz on a 48 kHz graph stopped taking audio at
+    291 queued frames against the 256 the loop waited for — silence, with every counter clean. The
+    level is `snd_pcm_delay`, since the queue alone moves in the server's lumps; a jump beyond the
+    queue relearns it. A **converted input** runs `outputDrivenLoop`: below 512 frames a
+    `ClockBridge`, stamped by `snd_pcm_htimestamp` on CLOCK_MONOTONIC, and from `RESERVOIR_FROM`
+    up 2.2.4's fixed-ratio `Resampler` into `CaptureReservoir`, which splices but does not drop out
+    where the bridge did. `StallWatch` stops a stream that writes nothing for two seconds. The
+    follower was played on hardware once and read -250 ppm, unsettled (`zero-dropouts.md` Z3); `known-issues.md` §5 says what to check.
+    `DropoutCounters` (2.3.2) counts late periods, split by the thread's own CPU time, and an output
+    found empty; the last stays out of `xruns`, since a server's lumps can do it without a gap.
   - `audio/linux/` — `LinuxRt` (realtime via `SCHED_FIFO`, else rtkit over D-Bus) and
     `LinuxPlatform` (the OS check). **They are separate on purpose**: `LinuxRt` declares JNA
     interfaces, so touching it loads JNA, and the OS check is what has to work when JNA does not.
@@ -423,10 +429,11 @@ sees a JACK entry and the Windows picker is exactly what it was before Linux exi
   offers the output's rates, and one the input cannot do is marked `C`: the capture endpoint opens
   at its own rate and its packets go into the `ClockBridge` as they are, which converts on the way
   out with the same resampler that follows the drift between the two crystals (2.3.0; before, a
-  fixed-ratio `Resampler` sat on the way in and the drift was spliced). The output is never
+  fixed-ratio `Resampler` sat on the way in and the drift was spliced). ALSA's `DriftFollower` does
+  resample the output, by ppm at one rate; that is drift, not a conversion. The output is never
   converted — the round trip is set by the hardware periods in milliseconds and the engine's rate
   only changes how many frames that is. ALSA
-  converts too since 1.7.0, through the same bridge since 2.3.0, in `bridgedLoop`: its lockstep
+  converts too since 1.7.0, through the bridge or the reservoir, in `outputDrivenLoop`: its lockstep
   loop has nowhere to put uneven counts, so a converted ALSA stream is driven by the output. A backend
   without the converter (JACK, where the server owns the one rate) offers the intersection. Before
   1.6.0 nothing converted, on the belief that it would cost more than the backend saved; measured,
@@ -540,6 +547,10 @@ knows nothing about devices; that is what makes it carry over unchanged to anoth
 **Do not iterate a `List` inside a per-sample loop.** `for (x in list)` allocates an iterator. In
 `Reverb` that was ~96 000 objects a second, which is how a young-generation collection becomes an
 audible dropout. Use arrays and hoist them into locals before the loop.
+
+**NAM runs block by block and must stay bit-identical to `ReferenceWaveNet` in the tests** (2.3.2).
+Every inner loop in `WaveNet` is over time, because a sum over channels is a float reduction and the
+JIT may not reorder one. Keep the additions in order, and change the reference only for a fault in it.
 
 **Wrap a delay line's read index as an integer, never as a float.** `Chorus` and `Delay` read a
 fraction of a sample behind the write head, and both once wrapped a negative read position with
@@ -1042,14 +1053,15 @@ implemented by zeroing the buffer in one step would click, so ramp it.
 
 ## Testing
 
-545 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
+570 tests in `src/test/kotlin/`, none of which needs an audio device and none of which opens a
 socket. The update suites run through the seam against canned files in `src/test/resources/update/`:
 `ReleasePickerTest` against a releases JSON shaped like GitHub's with the traps in it (a hot-fix
 listed first, a tag that is not a version, a draft), `ChecksumsTest` against FIPS 180-4's own `abc`
 digest, `InstallerTest` against temp folders with the launch injected, and
 `NoNetworkOutsideUpdaterTest`, which is the promise on the About dialog as a test. `AlsaTest` covers the ALSA
 codec and `/proc/asound` parsing against byte patterns worked out by hand; it touches no library, so
-it runs on Windows too, and pins `clockOf`, the rule for which pairs are bridged. The useful patterns are impulse
+it runs on Windows too, and pins `clockOf`, the rule for which pairs share a clock;
+`DriftFollowerTest` pins `joinFor` and simulates the follower against two clocks. The useful patterns are impulse
 response (`DelayTest` checks an echo lands at an offset computed independently), boundedness under
 extreme settings, and decay over time (`ReverbTest`).
 

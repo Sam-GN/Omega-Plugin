@@ -44,6 +44,7 @@ import org.example.audio.alsa.AlsaApi.Companion.ESTRPIPE
 import org.example.audio.linux.LinuxPlatform
 import org.example.audio.linux.LinuxRt
 import org.example.audio.ClockBridge
+import org.example.dsp.Resampler
 import org.example.util.Log
 import java.io.File
 import java.nio.ByteBuffer
@@ -75,8 +76,8 @@ class AlsaBackend : AudioBackend {
     override val id = BackendId.ALSA
 
     /**
-     * A capture PCM at a rate of its own — or on a clock of its own — goes into a [ClockBridge],
-     * and the output's clock drives the loop. One clock at one rate keeps the lockstep loop, untouched.
+     * A capture PCM at a rate of its own is converted, and the output's clock drives the loop. At
+     * one rate the input drives, and on two clocks [DriftFollower] keeps them together. See [joinFor].
      */
     override val convertsInput: Boolean get() = true
 
@@ -236,17 +237,16 @@ class AlsaBackend : AudioBackend {
         val captureRate = SampleRates.captureRate(rate, inCaps.sampleRates, inCaps.preferredSampleRate)
         val captureName = split(input.id).first
         val playbackName = split(output.id).first
-        // Two clocks — a converted rate, two cards, or a card against the sound server — go through
-        // the clock bridge (2.3.0). One clock keeps the lockstep loop: there is no drift to follow.
-        val bridged = captureRate != rate || clockOf(captureName) != clockOf(playbackName)
+        val join = joinFor(rate, captureRate, clockOf(captureName) != clockOf(playbackName), request.bufferFrames)
+        val bridged = join == AlsaJoin.BRIDGE || join == AlsaJoin.RESERVOIR
         if (captureRate != rate) {
             Log.info(
                 "alsa",
                 "${input.name} does not do $rate Hz; opening it at $captureRate Hz and converting " +
                     "(+${"%.2f".format(SampleRates.conversionMs(captureRate))} ms).",
             )
-        } else if (bridged) {
-            Log.info("alsa", "${input.name} and ${output.name} run on two clocks; joining them by resampling.")
+        } else if (join == AlsaJoin.FOLLOW) {
+            Log.info("alsa", "${input.name} and ${output.name} run on two clocks; following the drift between them.")
         }
         val capturePeriod = if (!bridged) request.bufferFrames else {
             convertedCapturePeriod(request.bufferFrames, rate, captureRate, inCaps.bufferSizes)
@@ -263,7 +263,7 @@ class AlsaBackend : AudioBackend {
             period = request.bufferFrames,
             captureRate = captureRate,
             capturePeriod = capturePeriod,
-            bridged = bridged,
+            join = join,
             callback = callback,
             events = events,
         )
@@ -309,8 +309,40 @@ internal fun clockOf(pcmName: String): String {
     return if (card.isNotEmpty()) "card:$card" else "card:" + pcmName.removePrefix("hw:").substringBefore(',')
 }
 
+/** How a pair's two sides are joined; see [joinFor]. */
+internal enum class AlsaJoin {
+    /** One clock: read a period, write a period. */
+    LOCKSTEP,
+
+    /** Two clocks at one rate: the lockstep loop, with [DriftFollower] on what is written. */
+    FOLLOW,
+
+    /** A converted input at a small period: the output drives and a [ClockBridge] joins. */
+    BRIDGE,
+
+    /** A converted input at a large period: the output drives and a [CaptureReservoir] joins. */
+    RESERVOIR,
+}
+
 /**
- * The capture period on two clocks: about half an output period, from the sizes the input
+ * Which join a pair gets. Measured on a Pocket Master into PipeWire for 2.3.1:
+ *
+ * - **One rate, two clocks** is paced by the input. Driven by the output, as in 2.3.0, it went
+ *   silent at 44.1 kHz: PipeWire stopped taking audio just above the level the loop waited for.
+ * - **A converted input** goes through the bridge, which splices nothing — except from
+ *   [RESERVOIR_FROM] frames up, where the bridge cut and dropped out 78 times in thirty seconds at
+ *   1024 and the reservoir, splicing sixteen frames a second, did not drop out at all.
+ */
+internal fun joinFor(rate: Int, captureRate: Int, twoClocks: Boolean, period: Int): AlsaJoin = when {
+    captureRate != rate -> if (period >= RESERVOIR_FROM) AlsaJoin.RESERVOIR else AlsaJoin.BRIDGE
+    twoClocks -> AlsaJoin.FOLLOW
+    else -> AlsaJoin.LOCKSTEP
+}
+
+internal const val RESERVOIR_FROM = 512
+
+/**
+ * The capture period of a converted input: about half an output period, from the sizes the input
  * actually accepts at its own rate.
  *
  * Half, because the input arrives in lumps of one capture period, and the bridge has
@@ -355,14 +387,13 @@ internal fun openPcmOrError(name: String, stream: Int): Pair<Pointer?, String?> 
  * Both PCMs are opened non-blocking and waited on with `snd_pcm_wait`, which has a timeout. A
  * blocking read on a card that has just been unplugged can stay blocked; this loop cannot.
  *
- * **When the two sides run on two clocks** — the input at a rate of its own, two cards, or a card
- * against the sound server — the lockstep cannot work: a converted period is never a whole engine
- * period, and two crystals drift until one side runs dry. Then the output's clock drives
- * [bridgedLoop] instead, and the input goes into a [ClockBridge] at its own rate, stamped with when
- * it was captured; the bridge converts and follows the drift by resampling, never splicing (2.3.0;
- * before, a fixed-ratio converter fed a reservoir that spliced a frame per correction, and a
- * same-rate pair on two cards had no correction at all). One clock keeps the loop above, exactly
- * as it was; the two share only the write and the counters.
+ * **Two clocks at one rate** keep this loop, and [DriftFollower] resamples what is written by a few
+ * parts per million so the queue stays where it started (2.3.1).
+ *
+ * **A converted input** cannot: a converted period is never a whole engine period. Then the output's
+ * clock drives [outputDrivenLoop], and the input waits in a [ClockBridge], which converts and follows
+ * the drift, or at large periods in a [CaptureReservoir] behind a fixed-ratio [Resampler], which
+ * splices a frame per correction. See [joinFor] for which and why.
  */
 internal class AlsaStream(
     private val captureName: String,
@@ -377,8 +408,8 @@ internal class AlsaStream(
     private val captureRate: Int = rate,
     /** The capture PCM's period, in its own frames. Equal to [period] unless converted. */
     private val capturePeriod: Int = period,
-    /** Two clocks: the output drives and a [ClockBridge] joins them. See the class note. */
-    private val bridged: Boolean = captureRate != rate,
+    /** How the two sides are joined. See the class note. */
+    private val join: AlsaJoin,
     private val callback: AudioCallback,
     private val events: StreamEvents,
 ) : AudioStream {
@@ -412,12 +443,34 @@ internal class AlsaStream(
     private val inputBlock = FloatArray(period)
     private val outputBlock = FloatArray(period)
 
-    // Two clocks only. Built here, on the opening thread, so the loop allocates nothing.
-    private val bridge = if (bridged) ClockBridge(captureRate, rate, capturePeriod) else null
-    private val rawInput = FloatArray(if (bridged) capturePeriod else 0)
+    // Whatever the join needs. Built here, on the opening thread, so the loop allocates nothing.
+    private val bridge = if (join == AlsaJoin.BRIDGE) ClockBridge(captureRate, rate, capturePeriod) else null
+    private val converter = if (join == AlsaJoin.RESERVOIR) {
+        Resampler(captureRate.toFloat(), rate.toFloat(), capturePeriod)
+    } else null
+    private val convertedInput = FloatArray(converter?.maxOutputFrames ?: 0)
+    private val reservoir = converter?.let { CaptureReservoir(period, it.maxOutputFrames) }
+    private val follower = if (join == AlsaJoin.FOLLOW) DriftFollower(rate, period) else null
+
+    /** The output drives the loop. */
+    private val outputDriven = bridge != null || reservoir != null
+    private val rawInput = FloatArray(if (outputDriven) capturePeriod else 0)
+
+    /** What is encoded and written: the engine's block, or the follower's frame more or less. */
+    private val writeBlock = if (follower != null) FloatArray(follower.maxOutputFrames) else outputBlock
+    private var writeFrames = period
+    private var playbackBufferFrames = 0L
+
+    private val dropouts = DropoutCounters(period * 1_000_000_000L / rate)
+    private val cpuMemory = Memory(16).apply { clear() }
+    private val cpuAddress = Pointer.nativeValue(cpuMemory)
+
+    /** `snd_pcm_delay`'s answer, one `snd_pcm_sframes_t`. */
+    private val delayMemory = if (follower != null) Memory(8).apply { clear() } else null
+    private val delayAddress = delayMemory?.let { Pointer.nativeValue(it) } ?: 0L
 
     /** `snd_pcm_htimestamp`'s answer: an `avail` and a `struct timespec`, 8 + 16 bytes. */
-    private val stampMemory = if (bridged) Memory(24).apply { clear() } else null
+    private val stampMemory = if (bridge != null) Memory(24).apply { clear() } else null
     private val stampAddress = stampMemory?.let { Pointer.nativeValue(it) } ?: 0L
 
     /** The capture PCM took the timestamp settings, so its stamps are monotonic and mean something. */
@@ -436,9 +489,17 @@ internal class AlsaStream(
     override var deadlineMisses: Int = 0
         private set
 
-    /** How the clock bridge is doing, when there is one (2.3.0). */
+    /** What went wrong and why, and how the join between two clocks is doing when there is one. */
     override val healthNote: String?
+        get() = listOfNotNull(joinNote, dropouts.describe(rate)).joinToString("; ")
+
+    private val joinNote: String?
         get() {
+            follower?.let { f ->
+                return "following drift ${"%+.0f".format(f.correctionPpm)} ppm, in hand ${"%.1f".format(f.levelMs)} ms " +
+                    "of ${"%.1f".format(f.targetMs)} ms, relearned ${f.relearned}"
+            }
+            reservoir?.let { return "reservoir splices ${it.corrections}, overflows ${it.overflows}" }
             val b = bridge ?: return null
             return "bridge dropouts ${b.underruns}, drift ${"%+.0f".format(b.correctionPpm)} ppm, " +
                 "bridge ${"%.1f".format(b.targetMs)} ms, backlogs cut ${b.backlogCuts}, " +
@@ -457,6 +518,14 @@ internal class AlsaStream(
     @Volatile
     private var firstCallbackNanos = 0L
     private var settle = 0
+
+    /** When the loop started moving audio, for [realtimeRatio] before anything has been counted. */
+    @Volatile
+    private var loopStartedNanos = 0L
+
+    /** Periods written since start, xruns or not. What [StallWatch] looks at. */
+    @Volatile
+    private var periodsOut = 0L
 
     @Volatile
     private var running = false
@@ -486,7 +555,13 @@ internal class AlsaStream(
     override val realtimeRatio: Float
         get() {
             val t0 = firstCallbackNanos
-            if (t0 == 0L) return 1f
+            if (t0 == 0L) {
+                // Still settling, or never going to: a stream that has not moved by now is starved,
+                // not perfect. This read 1.0 for ever, and --selftest passed a silent stream (2.3.1).
+                val from = loopStartedNanos
+                if (from == 0L) return 1f
+                return if (System.nanoTime() - from > SETTLE_PERIODS * periodNanos + 2_000_000_000L) 0f else 1f
+            }
             val elapsed = System.nanoTime() - t0
             if (elapsed <= 0) return 1f
             return (framesProcessed * 1_000_000_000.0 / (elapsed.toDouble() * rate)).toFloat()
@@ -502,7 +577,7 @@ internal class AlsaStream(
 
         // Bridged, the input is read once per *output* period in lumps of its own smaller period,
         // so its buffer is sized to hold eight output periods' worth, as the lockstep's does.
-        val captureBufferPeriods = if (bridge == null) 8 else {
+        val captureBufferPeriods = if (!outputDriven) 8 else {
             maxOf(8, Math.ceil(8.0 * period * captureRate / rate / capturePeriod).toInt())
         }
         val cap = setUp(
@@ -515,32 +590,33 @@ internal class AlsaStream(
         // writing the next, or it would fill the whole buffer and add two periods of latency.
         val play = setUp(
             p, playbackLabel, (outputChannels.maxOrNull() ?: 0) + 1, rate, period, bufferPeriods = 4,
-            queueLimit = if (bridge != null) (PREFILL - 1) * period else null,
+            queueLimit = if (outputDriven) (PREFILL - 1) * period else null,
         )
         outFormat = play.format; outChannels = play.channels
         playbackReadyAt = play.readyAt
+        playbackBufferFrames = play.bufferFrames
 
         inFrameBytes = inChannels * AlsaApi.bytesPerSample(inFormat)
         outFrameBytes = outChannels * AlsaApi.bytesPerSample(outFormat)
         inMemory = Memory(capturePeriod.toLong() * inFrameBytes).apply { clear() }
-        outMemory = Memory(period.toLong() * outFrameBytes).apply { clear() }
+        outMemory = Memory(writeBlock.size.toLong() * outFrameBytes).apply { clear() }
         inBytes = inMemory.getByteBuffer(0, inMemory.size()).order(ByteOrder.LITTLE_ENDIAN)
         outBytes = outMemory.getByteBuffer(0, outMemory.size()).order(ByteOrder.LITTLE_ENDIAN)
         inAddress = Pointer.nativeValue(inMemory)
         outAddress = Pointer.nativeValue(outMemory)
         outMask = BooleanArray(outChannels) { ch -> outputChannels.contains(ch) }
 
-        // One card, one clock: link them so they start on the same sample. Never when bridged: two
-        // clocks are two clocks whatever the link says.
-        linked = bridge == null && AlsaLibrary.api.snd_pcm_link(c, p) == 0
+        // One card, one clock: link them so they start on the same sample. Never on two clocks:
+        // two clocks are two clocks whatever the link says.
+        linked = join == AlsaJoin.LOCKSTEP && AlsaLibrary.api.snd_pcm_link(c, p) == 0
 
-        baseFormat = if (bridge == null) {
+        baseFormat = if (!outputDriven) {
             StreamFormat(
                 sampleRate = rate,
                 bufferFrames = period,
                 inputLatencyFrames = period,
                 outputLatencyFrames = period * PREFILL,
-                adapterLatencyFrames = 0,
+                adapterLatencyFrames = if (follower != null) DriftFollower.LATENCY_FRAMES else 0,
             )
         } else {
             StreamFormat(
@@ -548,15 +624,16 @@ internal class AlsaStream(
                 bufferFrames = period,
                 inputLatencyFrames = Math.round(capturePeriod.toFloat() * rate / captureRate),
                 outputLatencyFrames = period * PREFILL,
-                // The bridge's level, which includes its resampler's delay. Declared, not hidden.
-                adapterLatencyFrames = bridge.startingLatencyFrames(period),
+                // The join's level and its resampler's delay. Declared, not hidden.
+                adapterLatencyFrames = bridge?.startingLatencyFrames(period)
+                    ?: (reservoir!!.latencyFrames + SampleRates.conversionFrames(captureRate, rate)),
                 inputRate = captureRate,
             )
         }
     }
 
     /** What a PCM was configured to, and the `avail` at which it reports itself ready. */
-    private class Granted(val format: Int, val channels: Int, val readyAt: Long, val timestamped: Boolean)
+    private class Granted(val format: Int, val channels: Int, val readyAt: Long, val timestamped: Boolean, val bufferFrames: Long)
 
     /**
      * hw and sw parameters for one direction.
@@ -631,7 +708,7 @@ internal class AlsaStream(
             } finally {
                 api.snd_pcm_sw_params_free(sw.value)
             }
-            return Granted(format, channels, availMin, stamps)
+            return Granted(format, channels, availMin, stamps, bufferFrames.value)
         } finally {
             api.snd_pcm_hw_params_free(params)
         }
@@ -676,6 +753,9 @@ internal class AlsaStream(
 
     private fun monitorLoop() {
         var saidEarlyWakes = false
+        val stall = StallWatch(STALL_LOOKS)
+        var logged = 0
+        var loggedXruns = 0
         while (running || lostCode != 0) {
             try {
                 Thread.sleep(250)
@@ -694,6 +774,22 @@ internal class AlsaStream(
             if (code != 0) {
                 lostCode = 0
                 events.onDeviceLost("$captureLabel / $playbackLabel stopped: ${AlsaLibrary.api.snd_strerror(code)}")
+                return
+            }
+            // As it happens, so it can be matched with what was heard and with what else the machine did.
+            val total = dropouts.total
+            if (total != logged || xruns != loggedXruns) {
+                logged = total
+                loggedXruns = xruns
+                Log.info("alsa", "Dropout watch: xruns $loggedXruns; ${dropouts.describe(rate)}.")
+            }
+            if (running && loopStartedNanos != 0L && stall.stalled(periodsOut)) {
+                running = false
+                Log.warn("alsa", "$captureLabel / $playbackLabel: no period written for two seconds. ($healthNote)")
+                events.onDeviceLost(
+                    "$captureLabel / $playbackLabel stopped moving audio without reporting an error. " +
+                        "Press Start again; if it repeats, choose another RATE or BUFFER.",
+                )
                 return
             }
         }
@@ -716,8 +812,9 @@ internal class AlsaStream(
             lostCode = -5
             return
         }
-        if (bridge != null) {
-            bridgedLoop(c, p, bridge)
+        loopStartedNanos = System.nanoTime()
+        if (outputDriven) {
+            outputDrivenLoop(c, p)
             return
         }
         while (running) {
@@ -750,16 +847,20 @@ internal class AlsaStream(
             }
 
             val t0 = System.nanoTime()
+            val cpu0 = threadCpuNanos()
             try {
                 decode()
                 callback.render(inputBlock, outputBlock, period)
+                if (follower != null) follow(c, p, follower)
                 encode()
             } catch (_: Throwable) {
-                java.util.Arrays.fill(outputBlock, 0f)
+                java.util.Arrays.fill(writeBlock, 0f)
+                writeFrames = period
                 encode()
                 xruns++
             }
             val spent = System.nanoTime() - t0
+            examine(p, spent, cpu0)
 
             failed = writePeriod(p)
             if (failed != 0) {
@@ -770,12 +871,25 @@ internal class AlsaStream(
         }
     }
 
+    /** The rendered period through the follower, steered by what is in hand. */
+    private fun follow(c: Pointer, p: Pointer, follower: DriftFollower) {
+        writeFrames = follower.process(outputBlock, writeBlock)
+        // Any of these may fail on a PCM about to xrun; the write that follows says so.
+        val waiting = AlsaRt.snd_pcm_avail(c)
+        val room = AlsaRt.snd_pcm_avail(p)
+        if (waiting < 0 || room < 0 || AlsaRt.snd_pcm_delay(p, delayAddress) != 0) return
+        follower.steer(
+            level = (delayMemory!!.getLong(0) + waiting).toDouble(),
+            queued = (playbackBufferFrames - room + waiting).toDouble(),
+        )
+    }
+
     /**
-     * The loop on two clocks. The output's clock drives it: wait until the output is down to one
-     * queued period, take in everything the input has captured meanwhile, hand the engine one period
-     * out of the bridge, write it.
+     * The loop for a converted input. The output's clock drives it: wait until the output is down to
+     * one queued period, take in everything the input has captured meanwhile, hand the engine one
+     * period out of the bridge or the reservoir, write it.
      */
-    private fun bridgedLoop(c: Pointer, p: Pointer, bridge: ClockBridge) {
+    private fun outputDrivenLoop(c: Pointer, p: Pointer) {
         var counted = 0
         while (running) {
             val room = AlsaRt.snd_pcm_avail(p)
@@ -786,21 +900,26 @@ internal class AlsaStream(
                 if (w >= 0) continue
                 failed = w
             }
-            if (failed == 0) failed = drainCapture(c, bridge)
+            if (failed == 0) failed = drainCapture(c)
             if (failed != 0) {
                 if (!recover(c, p, failed)) return
                 continue
             }
 
             val t0 = System.nanoTime()
-            bridge.read(inputBlock, period, t0)
+            val cpu0 = threadCpuNanos()
             // A dropout or a cut is heard, so both count — but not while the stream settles: a USB
             // output takes several periods in a burst as it starts, before the input has caught up.
             // Measured on a Razer headset, once or twice per start, never after.
-            val events = bridge.underruns + bridge.backlogCuts
-            if (events != counted) {
-                if (settle >= SETTLE_PERIODS) xruns += events - counted
-                counted = events
+            if (bridge != null) {
+                bridge.read(inputBlock, period, t0)
+                val events = bridge.underruns + bridge.backlogCuts
+                if (events != counted) {
+                    if (settle >= SETTLE_PERIODS) xruns += events - counted
+                    counted = events
+                }
+            } else if (!reservoir!!.take(inputBlock) && settle >= SETTLE_PERIODS) {
+                xruns++
             }
             try {
                 callback.render(inputBlock, outputBlock, period)
@@ -811,6 +930,7 @@ internal class AlsaStream(
                 xruns++
             }
             val spent = System.nanoTime() - t0
+            examine(p, spent, cpu0)
 
             failed = writePeriod(p)
             if (failed != 0) {
@@ -822,7 +942,7 @@ internal class AlsaStream(
     }
 
     /**
-     * Everything the input has captured since the last look, into [bridge] at its own rate. Returns
+     * Everything the input has captured since the last look, into the bridge or reservoir. Returns
      * 0, or the ALSA error that stopped it. Bounded: the capture buffer holds at most
      * [MAX_DRAIN_READS] periods' worth, so a loop that went further would be reading what arrived
      * while it ran.
@@ -832,7 +952,7 @@ internal class AlsaStream(
      * stamp a packet captured several milliseconds ago reads as just arrived, and at an exact ratio of
      * periods the bridge's level wobbles on the slow beat between the clocks (see `ClockBridgeTest`).
      */
-    private fun drainCapture(c: Pointer, bridge: ClockBridge): Int {
+    private fun drainCapture(c: Pointer): Int {
         val offset = inputChannel * AlsaApi.bytesPerSample(inFormat)
         val now = System.nanoTime()
         var landed = now
@@ -852,20 +972,22 @@ internal class AlsaStream(
             if (r < 0) return r.toInt()
             val n = r.toInt()
             AlsaCodec.decode(inBytes, inFormat, inFrameBytes, offset, rawInput, n)
-            bridge.write(rawInput, n, landed)
+            if (bridge != null) bridge.write(rawInput, n, landed)
+            else reservoir!!.push(convertedInput, converter!!.process(rawInput, n, convertedInput))
         }
         return 0
     }
 
-    /** One period from [outAddress] into the playback PCM. Returns 0 or an ALSA error. */
+    /** [writeFrames] from [outAddress] into the playback PCM. Returns 0 or an ALSA error. */
     private fun writePeriod(p: Pointer): Int {
+        val frames = writeFrames
         var put = 0
-        while (put < period && running) {
-            val w = AlsaRt.snd_pcm_writei(p, outAddress + put.toLong() * outFrameBytes, (period - put).toLong())
+        while (put < frames && running) {
+            val w = AlsaRt.snd_pcm_writei(p, outAddress + put.toLong() * outFrameBytes, (frames - put).toLong())
             if (w >= 0) {
                 put += w.toInt()
             } else if (w == -EAGAIN.toLong()) {
-                val r = await(p, (period - put).toLong())
+                val r = await(p, (frames - put).toLong())
                 if (r < 0) return r
             } else {
                 return w.toInt()
@@ -886,8 +1008,26 @@ internal class AlsaStream(
         return w
     }
 
+    /** How long this thread has run, or -1. */
+    private fun threadCpuNanos(): Long {
+        if (PosixRt.clock_gettime(PosixRt.CLOCK_THREAD_CPUTIME_ID, cpuAddress) != 0) return -1L
+        return cpuMemory.getLong(0) * 1_000_000_000L + cpuMemory.getLong(8)
+    }
+
+    /** A rendered period about to be written: was it late, and was there anything left to play? */
+    private fun examine(p: Pointer, spent: Long, cpu0: Long) {
+        if (settle < SETTLE_PERIODS) return
+        val cpu1 = threadCpuNanos()
+        val room = AlsaRt.snd_pcm_avail(p)
+        // An error here is the xrun the write is about to report, and counts there.
+        val queued = if (room < 0) Long.MAX_VALUE else playbackBufferFrames - room
+        dropouts.period(spent, if (cpu0 < 0 || cpu1 < 0) -1L else cpu1 - cpu0, queued)
+    }
+
     /** The counters, once a period has gone out. */
     private fun account(spent: Long) {
+        periodsOut++
+        if (settle >= SETTLE_PERIODS) dropouts.written(System.nanoTime())
         if (settle < SETTLE_PERIODS) settle++
         else if (firstCallbackNanos == 0L) firstCallbackNanos = System.nanoTime()
         else framesProcessed += period
@@ -911,6 +1051,10 @@ internal class AlsaStream(
     private fun restart(c: Pointer, p: Pointer): Int {
         // Whatever was waiting belongs to the stream that just broke; start clean. The bridge needs
         // nothing: it finds itself short, refills to its target, and fades back in.
+        reservoir?.reset()
+        converter?.reset()
+        follower?.restart()
+        dropouts.restart()
         AlsaRt.snd_pcm_drop(c)
         if (!linked) AlsaRt.snd_pcm_drop(p)
         var e = AlsaRt.snd_pcm_prepare(c)
@@ -942,11 +1086,14 @@ internal class AlsaStream(
     private fun decode() =
         AlsaCodec.decode(inBytes, inFormat, inFrameBytes, inputChannel * AlsaApi.bytesPerSample(inFormat), inputBlock, period)
 
-    private fun encode() = AlsaCodec.encode(outputBlock, period, outBytes, outFormat, outChannels, outMask)
+    private fun encode() = AlsaCodec.encode(writeBlock, writeFrames, outBytes, outFormat, outChannels, outMask)
 
     private companion object {
         const val PREFILL = 2
         const val SETTLE_PERIODS = 64
+
+        /** Of the monitor's 250 ms looks: two seconds. */
+        const val STALL_LOOKS = 8
 
         /** Reads per drain: comfortably more than the capture buffer holds in capture periods. */
         const val MAX_DRAIN_READS = 64

@@ -821,7 +821,8 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     if (looper != null) println("loop    : three lanes playing (one through the boards), a fourth recording")
     val engine = AudioEngine(chain, second = second, post = post, looper = looper)
     engine.split = split
-    engine.onError = { println("stream error: $it") }
+    val failedWith = java.util.concurrent.atomic.AtomicReference<String>()
+    engine.onError = { failedWith.set(it); println("stream error: $it") }
 
     try {
         engine.start(
@@ -979,6 +980,7 @@ private fun selfTest(argv: List<String>, measure: Boolean) {
     val starved = ratio < 0.995f
     println(
         when {
+            failedWith.get() != null -> "FAIL - the stream stopped: ${failedWith.get()}"
             starved -> String.format(
                 "FAIL - the device was starved: it got %.2f%% of the audio it asked for.", ratio * 100f
             )

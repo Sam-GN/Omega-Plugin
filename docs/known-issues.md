@@ -82,13 +82,18 @@ about it came from one Manjaro laptop's built-in HDA card. Specifically:
   same pair of devices, so the limit is believed to be the hardware's. 256 frames runs clean.
 - **The window has been started, not looked at** — not at the Steam Deck's 1280×800, not under
   fractional scaling, and the file dialogs have not been opened. See `linux-compat.md` F7 and F8.
-- **ALSA's clock bridge (2.3.0) has not run on Linux at all.** Written and simulated on Windows:
-  a converted input, two cards, and a card against `default` now go through the `ClockBridge`
-  instead of the splicing reservoir, or, for two cards at one rate, instead of nothing. To check
-  on a Linux machine: the log's `Stream health` line should say `capture timestamps on`; drift
-  should settle within tens of ppm and stay there; one card both ways should still say nothing
-  about a bridge, since it keeps the lockstep. If `capture timestamps off`, the drift reading
-  wobbles but must not drop out.
+- **ALSA's drift follower (2.3.1) is not settled on hardware**: -250 ppm at one look and -36 at
+  another in one session, 1.2 ms under its target at the first. Two clocks at one rate. To check: the
+  log's `Stream health` line says `following drift`; `in hand` should stay at its `of` figure, the
+  drift should settle within tens of ppm, and `relearned` should stay at 0 unless another program
+  changed the server's period. Whether PipeWire's `snd_pcm_delay` moves smoothly is assumed.
+- **ALSA's clock bridge runs on Linux since 2.3.0**, Pocket Master into PipeWire at 48 kHz: clean at
+  256 frames, one dropout in six seconds at 64. Its drift reading wanders by a hundred ppm or more.
+- **A converted ALSA input splices single samples at 512 frames and up** (2.3.1), because the bridge
+  dropped out there. Believed, not shown, to be its 8 ms backlog threshold against a 21 ms period.
+- **A converted input whose engine rate PipeWire itself converts may stall** as 44.1 kHz did: for
+  instance a 48 kHz-only input run at 44.1 kHz into `Default`. No such input was available. Since
+  2.3.1 it stops with an explanation rather than playing silence.
 
 The degradation path was exercised on Linux against 1.1.0-beta (JNA off the classpath: Java Sound
 streams, both native backends explain themselves). It found and fixed a crash in `--list-backends`;

@@ -125,6 +125,9 @@ internal object AlsaRt {
     @JvmStatic external fun snd_pcm_start(pcm: Pointer): Int
     @JvmStatic external fun snd_pcm_drop(pcm: Pointer): Int
 
+    /** `delay` is the address of a `snd_pcm_sframes_t`: frames until what is written next is heard. */
+    @JvmStatic external fun snd_pcm_delay(pcm: Pointer, delay: Long): Int
+
     /** `avail` and `tstamp` are the addresses of a `snd_pcm_uframes_t` and a `struct timespec`. */
     @JvmStatic external fun snd_pcm_htimestamp(pcm: Pointer, avail: Long, tstamp: Long): Int
 
@@ -145,6 +148,11 @@ internal object AlsaRt {
  */
 internal object PosixRt {
     @JvmStatic external fun usleep(micros: Int): Int
+
+    /** `time` is the address of a `struct timespec`. For [CLOCK_THREAD_CPUTIME_ID]: how long we ran. */
+    @JvmStatic external fun clock_gettime(clock: Int, time: Long): Int
+
+    const val CLOCK_THREAD_CPUTIME_ID = 3
 
     @Volatile
     private var registered = false
